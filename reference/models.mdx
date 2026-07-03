@@ -16,7 +16,7 @@ The Hechizo SAP Intercompany application uses a small set of lightweight model c
 `DetallesOPORT` represents a single detail line read from a SAP Business One opportunity or order document. It is used internally to carry line-level data — quantities, prices, discount percentages, tax groups, and project codes — through the intercompany document flow methods before the data is serialized into Service Layer JSON payloads.
 
 ```csharp
-public class DetallesOPORT
+class DetallesOPORT
 {
     public int DocEntry { get; set; }
     public string ItemCode { get; set; }

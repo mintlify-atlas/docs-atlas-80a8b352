@@ -4,7 +4,7 @@ sidebarTitle: "Tools"
 description: "Reference for the supporting utility classes in the Inter_Hechiz.tools and Inter_Hechiz.Tools namespaces: RegistroLog, IniFile, LiberaMemoria, gestorarchivos, OcultarConsola, and ConexionDiapi."
 ---
 
-The synchronization engine relies on a small set of utility classes that handle cross-cutting concerns: structured logging, INI-file configuration reading, OS-level memory management, file copying, console window visibility, and SAP DI-API connectivity. These classes are intentionally lightweight — none of them carry domain logic — and several of them use Windows P/Invoke (`kernel32.dll`, `user32.dll`) since the application targets .NET Framework 4.8 on a Windows Server host.
+The synchronization engine relies on a small set of utility classes that handle cross-cutting concerns: structured logging, INI-file configuration reading, OS-level memory management, file copying, console window visibility, and SAP DI-API connectivity. These classes are intentionally lightweight — none of them carry domain logic — and several of them use Windows P/Invoke (`kernel32`, `kernel32.dll`, `user32.dll`) since the application targets .NET Framework 4.8 on a Windows Server host.
 
 ---
 
@@ -35,7 +35,7 @@ public void Graba(string strLog)
 Appends `strLog` followed by a newline to a date-stamped text file in the `Log/` subdirectory next to the executable. The file is named `Log_YYYYMMDD.txt` based on the current date, so a new file is started automatically at midnight without any scheduler intervention. The `Log/` directory is created if it does not exist.
 
 **Log path pattern:**
-```
+```text
 <exe-dir>/Log/Log_20260618.txt
 ```
 
@@ -52,7 +52,7 @@ public void GrabaJson(string strLog)
 Identical to `Graba` in behavior but writes to a separate file named `LogJson_YYYYMMDD.txt`. This file is used to log raw JSON payloads for debugging Service Layer requests and responses, keeping them separate from the operational log.
 
 **Log path pattern:**
-```
+```text
 <exe-dir>/Log/LogJson_20260618.txt
 ```
 
@@ -77,7 +77,7 @@ Writes `strLog` to a non-rotating file `LogProcesos/LogProc.txt`, relative to th
 **Namespace:** `Inter_Hechiz.tools`  
 **File:** `Tools/IniFile.cs`
 
-`IniFile` wraps the Windows `kernel32.dll` `GetPrivateProfileString` and `WritePrivateProfileString` functions via P/Invoke to provide INI-file read/write operations. It is the sole mechanism by which the application reads its configuration — every class that needs a setting constructs an `IniFile` instance pointing to `config.ini` in the executable directory.
+`IniFile` wraps the Windows `kernel32` `GetPrivateProfileString` and `WritePrivateProfileString` functions via P/Invoke to provide INI-file read/write operations. It is the sole mechanism by which the application reads its configuration — every class that needs a setting constructs an `IniFile` instance pointing to `config.ini` in the executable directory.
 
 ```csharp
 public class IniFile
@@ -159,10 +159,10 @@ Writes `Valor` to `[Seccion] > Clave` in the INI file. Creates the key if it doe
 **Namespace:** `Inter_Hechiz`  
 **File:** `Tools/LiberaMemoria.cs`
 
-`LiberaMemoria` is a static utility class that releases .NET managed memory and trims the process working set after large synchronization operations. It is called at the end of the legacy `SINCROERROR` method and can be invoked anywhere a significant memory release is desired.
+`LiberaMemoria` is a utility class that releases .NET managed memory and trims the process working set after large synchronization operations. It is called at the end of the legacy `SINCROERROR` method and can be invoked anywhere a significant memory release is desired.
 
 ```csharp
-public static class LiberaMemoria
+class LiberaMemoria
 {
     public static void FlushMemory()
 }
@@ -206,7 +206,7 @@ public static void FlushMemory()
 `gestorarchivos` is a static file-management helper that copies a named file from a source directory to a destination directory, creating the destination if it does not exist. It exposes a `paso` status flag that callers can inspect to determine whether the copy succeeded.
 
 ```csharp
-public static class gestorarchivos
+public class gestorarchivos
 {
     public static int paso = 0;
 
@@ -268,10 +268,10 @@ if (gestorarchivos.paso == 1)
 **Namespace:** `Inter_Hechiz.tools`  
 **File:** `Tools/OcultarConsola.cs`
 
-`OcultarConsola` is an internal static class that hides the console window at application startup. Because the application runs as a scheduled task, leaving the console window visible would create a distracting UI flash each time the task fires. Hiding the window keeps execution invisible to interactive desktop sessions.
+`OcultarConsola` is a package-private class that hides the console window at application startup. Because the application runs as a scheduled task, leaving the console window visible would create a distracting UI flash each time the task fires. Hiding the window keeps execution invisible to interactive desktop sessions.
 
 ```csharp
-internal static class OcultarConsola
+class OcultarConsola
 {
     public static void DisappearConsole()
 }

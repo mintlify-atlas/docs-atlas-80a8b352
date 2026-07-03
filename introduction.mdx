@@ -1,7 +1,7 @@
 ---
 title: "Hechizo SAP Intercompany: Multi-Company SAP B1 Sync"
 sidebarTitle: "Introduction"
-description: "Learn how Hechizo SAP Intercompany automates bidirectional data replication across nine SAP Business One company databases using the Service Layer API."
+description: "Hechizo SAP Intercompany replicates master data and commercial documents across ten SAP Business One databases: one Hechizo hub and nine branch companies."
 ---
 
 Hechizo SAP Intercompany is a .NET Framework 4.8 console application (`MCH_IC.exe`) that eliminates the manual overhead of keeping ten SAP Business One company databases in sync. Designed to run as a scheduled Windows process, it connects to all ten companies simultaneously through the SAP Business One Service Layer REST API, then executes a deterministic sequence of create and update operations — propagating master data from the central Hechizo company outward to nine branch companies, and funneling commercial documents (purchase requests, sales orders, invoices, credit notes, and payments) back through Hechizo and across the entire group.

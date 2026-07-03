@@ -1,5 +1,5 @@
 ---
-title: "Hechizo Intercompany Architecture and Data Flow"
+title: "Hechizo Intercompany: Architecture and Execution Sequence"
 sidebarTitle: "Architecture"
 description: "Understand the hub-and-spoke design, component layout, and execution sequence of the Hechizo SAP Intercompany synchronization engine."
 ---
@@ -90,7 +90,7 @@ This token is sent as the `Authorization` header on every Service Layer request.
     ```csharp
     Data.Intercompany.SINCROERROR_V2();
     ```
-    Initializes or resets the `@SINCROERROR` custom table in SAP. This runs before any sync work so that the error table is clean and ready to receive failures from the current cycle.
+    Calls the stored procedure `SP_LIMPIA_SINCROERROR()` on the Hechizo HANA database to clear the `@SINCROERROR` custom table. This runs before any sync work so that the error table contains only failures from the current execution cycle.
   </Step>
 
   <Step title="Master Data — Manufacturers, Item Groups, Business Partner Groups, Payment Terms">

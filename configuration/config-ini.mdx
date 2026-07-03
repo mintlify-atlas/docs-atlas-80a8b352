@@ -1,7 +1,7 @@
 ---
 title: "config.ini Reference: All Configuration Keys Explained"
 sidebarTitle: "config.ini"
-description: "Complete reference for every key in config.ini — the single configuration file that controls HANA connectivity, company databases, Service Layer credentials, and scheduler settings."
+description: "Complete reference for config.ini — covers HANA ODBC connectivity, company database names, Service Layer credentials, and business partner CardCodes."
 ---
 
 The entire runtime behaviour of **MCH\_IC.exe** is driven by a single plain-text INI file named `config.ini`. The file must be placed in the same directory as the executable — i.e., the build output folder (e.g. `MCH_IC/bin/x64/Debug/` during development, or the deployment folder in production). Every key is read at process startup through the `IniFile` class, which delegates directly to the Windows `kernel32.dll` `GetPrivateProfileString` API, so the file must exist and be accessible before the first sync cycle begins.
@@ -27,7 +27,7 @@ private static extern int GetPrivateProfileString(
     StringBuilder retVal, int size, string filePath);
 ```
 
-The `LeerINI(section, key)` helper method calls `GetPrivateProfileString` with a 255-character buffer and returns the trimmed string value. All reads happen through `Conexion.cs` static field initializers at class-load time, meaning any missing or malformed key will produce an empty string (or throw an `ArgumentNullException` for the mandatory `UserSL`/`PassSL` credential keys).
+The `LeerINI(section, key)` helper method calls `GetPrivateProfileString` with a 255-character buffer and returns the string value (the Windows API automatically strips leading and trailing whitespace from INI values). All reads happen through `Conexion.cs` static field initializers at class-load time, meaning any missing or malformed key will produce an empty string — including `UserSL` and `PassSL`, which are guarded by `?? throw new ArgumentNullException(...)` but in practice receive empty strings rather than null when absent.
 
 The path to the file is always resolved relative to the executing assembly:
 
@@ -66,7 +66,7 @@ This is the primary section. It provides both the Service Layer authentication c
 | Key | Description |
 |-----|-------------|
 | `UserSL` | SAP Business One application user name used to authenticate against the Service Layer for every company. This value is embedded in the Base64 JSON token (see `Authentication`). |
-| `PassSL` | Password for `UserSL`. Appended after a colon to the serialised JSON credential before Base64 encoding. Throwing `ArgumentNullException` if absent. |
+| `PassSL` | Password for `UserSL`. Appended after a colon to the serialised JSON credential before Base64 encoding. If absent, `LeerINI` returns an empty string and the token will be malformed. |
 
 #### ODBC / HANA direct connection
 
@@ -82,8 +82,8 @@ These keys are assembled at startup into the `Conexion.strCon` connection string
 
 The assembled connection string takes this form:
 
-```bash
-DRIVER={HDBODBC}; SERVERNODE=hana-007:30015; UID=SYSTEM; PWD=<your_password>
+```text
+DRIVER={HDBODBC}; SERVERNODE=hana-007:30015;  UID=SYSTEM; PWD=<your_password>
 ```
 
 #### Company database names

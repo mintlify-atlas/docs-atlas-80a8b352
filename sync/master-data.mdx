@@ -1,7 +1,7 @@
 ---
 title: "Synchronizing Master Data Across SAP B1 Companies"
 sidebarTitle: "Master Data"
-description: "Learn how Hechizo SAP Intercompany replicates manufacturers, item groups, business partner groups, payment terms, items, discount groups, salespeople, and employees."
+description: "Learn how Hechizo SAP Intercompany replicates manufacturers, item groups, business partner groups, payment terms, items, discount groups, and employees."
 ---
 
 Master data synchronization is the foundation of the intercompany process. Before any transactional document is created or updated, Hechizo SAP Intercompany ensures that all reference data — manufacturers, item groups, business partner groups, payment terms, items, discount groups, salespeople, and employees — is consistent across the entire company landscape. Most entities flow in a single direction: from the Hechizo hub database outward to all nine branch companies. Items are the notable exception: each branch can act as an origin, broadcasting new and updated article definitions to every other company in the network using the branch's key string. Business partners follow the same peer-to-peer model, with every ordered company pair (9 × 8 = 72 combinations) covered in both the create and update passes.

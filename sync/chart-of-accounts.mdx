@@ -1,7 +1,7 @@
 ---
 title: "Synchronizing the Chart of Accounts from Hechizo"
 sidebarTitle: "Chart of Accounts"
-description: "How Hechizo SAP Intercompany replicates GL account definitions from the Hechizo hub company to all nine branch companies using ProcesarCuentasdesdeHechizoV2."
+description: "Hechizo SAP Intercompany replicates GL account definitions from the hub to all nine branch companies using ProcesarCuentasdesdeHechizoV2."
 ---
 
 The General Ledger chart of accounts is mastered exclusively in the Hechizo hub database. `ProcesarCuentasdesdeHechizoV2` is responsible for propagating those account definitions to all nine branch companies, ensuring that every GL account referenced by an automatically created document — purchase orders, AP invoices, AP credit notes, and incoming payments — already exists in the target company before any posting is attempted. The method runs in two sequential phases per execution cycle: a **Crear** pass that inserts accounts missing from the branch, followed by an **Actualizar** pass that patches the attributes of accounts that are already present.
@@ -11,7 +11,7 @@ The General Ledger chart of accounts is mastered exclusively in the Hechizo hub 
 </Warning>
 
 <Note>
-  GL account synchronization runs **after** all document processing steps (purchase requests, sales orders, purchase orders, invoices, credit notes, and payments). This sequencing is intentional: accounts must exist before they are referenced in transactions, and the document processing steps themselves may trigger SAP B1 to auto-create posting lines that reference Hechizo-mastered accounts.
+  GL account synchronization runs **after** all document processing steps (purchase requests, sales orders, purchase orders, invoices, and credit notes), but **before** incoming payments. This sequencing is intentional: accounts must exist before they are referenced in transactions, and the document processing steps themselves may trigger SAP B1 to auto-create posting lines that reference Hechizo-mastered accounts.
 </Note>
 
 ---

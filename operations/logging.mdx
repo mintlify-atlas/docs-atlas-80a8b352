@@ -123,7 +123,7 @@ public class RegistroLog
 }
 ```
 
-The `GrabaProc` method and its companion static class `RegistroProcesos.LogProcesos()` write to `LogProcesos\LogProc.txt` — a single non-rotating file next to the executable. This path is a legacy mechanism from earlier builds and is no longer the primary log surface. Prefer `Log_YYYYMMDD.txt` and `LogJson_YYYYMMDD.txt` for day-to-day operations.
+The `GrabaProc` method and the separate `RegistroProcesos` class (also in namespace `Inter_Hechiz.tools`) both write to `LogProcesos\LogProc.txt` — a single non-rotating file. Both use `Directory.GetCurrentDirectory()` rather than `AppDomain.CurrentDomain.BaseDirectory`, so the resolved path follows the process working directory rather than the executable location. This is a legacy mechanism from earlier builds and is no longer the primary log surface. Prefer `Log_YYYYMMDD.txt` and `LogJson_YYYYMMDD.txt` for day-to-day operations.
 
 ---
 

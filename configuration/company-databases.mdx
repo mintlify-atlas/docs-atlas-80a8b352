@@ -1,7 +1,7 @@
 ---
 title: "Company Database Setup for Intercompany Synchronization"
 sidebarTitle: "Company Databases"
-description: "Configure the nine branch company databases and the Hechizo hub company in config.ini. Understand database naming conventions and business partner code mapping."
+description: "Configure ten SAP B1 company databases in config.ini: hub-and-spoke topology, HANA schema names, and business partner CardCodes for intercompany sync."
 ---
 
 Hechizo SAP Intercompany uses a **hub-and-spoke** topology across ten SAP Business One company databases running on a single SAP HANA instance. The hub company — referred to internally as `ORIGEN` — is **Hechizo** (`10071_HECHIZO_DEP`). It serves as the single source of truth for all master data: item manufacturers, item groups, business partner groups, payment terms, and items. Each of the nine branch companies is a spoke that receives replicated data from the hub and participates in intercompany purchase-order and invoice flows. All ten companies live in the same HANA system and are addressed by their HANA schema name, which is what `config.ini` stores under `[ConexionHanaProd]`.
@@ -96,7 +96,7 @@ private static string Consultar_sur()
 }
 ```
 
-Each method opens a fresh `IniFile` handle, reads the named key from `[ConexionHanaProd]`, and returns the trimmed string. If the key is missing or the file cannot be opened, the method catches the exception, writes it to the log, and returns an empty string — causing that branch's sync operations to silently skip with HANA cross-schema queries targeting an empty schema name.
+Each method opens a fresh `IniFile` handle, reads the named key from `[ConexionHanaProd]`, and returns the string value (whitespace is stripped by the Windows `GetPrivateProfileString` API). If the key is missing or the file cannot be opened, the method catches the exception, writes it to the log, and returns an empty string — causing that branch's sync operations to silently skip with HANA cross-schema queries targeting an empty schema name.
 
 The static fields are declared and initialised in declaration order:
 
@@ -127,8 +127,8 @@ public static string strCon = conexionhana();
 
 The resulting string looks like this, using the values from `[ConexionHanaProd]`:
 
-```
-DRIVER={HDBODBC}; SERVERNODE=hana-007:30015; UID=SYSTEM; PWD=<hana-password>
+```text
+DRIVER={HDBODBC}; SERVERNODE=hana-007:30015;  UID=SYSTEM; PWD=<hana-password>
 ```
 
 This single connection is sufficient to query all company schemas because the HANA `SYSTEM` user has cross-schema visibility and the queries use fully-qualified table references (e.g. `"10071_HECHIZO_DEP"."OMRC"`).

@@ -1,7 +1,7 @@
 ---
 title: "Replicating Invoices, Credit Notes, and Payments"
 sidebarTitle: "Invoices & Payments"
-description: "How Hechizo AR invoices and credit notes are mirrored as AP documents in branch companies, and how incoming payments are synchronized across all company pairs."
+description: "How Hechizo AR invoices and credit notes are mirrored as AP documents in branch companies, and how payments are synchronized across all company pairs."
 ---
 
 Once purchase orders exist in a branch and the corresponding goods have been delivered, Hechizo raises AR invoices (FacturaDeudor) against each branch company. Hechizo SAP Intercompany automatically mirrors those invoices as AP invoices (FacturaProveedor) in the branch, closing the commercial loop between the hub and its subsidiaries. The same mirroring applies to AR credit notes. Incoming payments complete the cycle: because intercompany settlements can originate in any company and be received by any other, the payment sync covers every ordered pair across the entire 10-company network (Hechizo plus 9 branches), totaling 90 calls per execution cycle.
@@ -165,6 +165,7 @@ The following is a real JSON payload captured from `LogJson_20260527.txt`, repre
   "U_DocEntryOrigen": 2458,
   "U_DocNumOrigen": 1509,
   "CardCode": "PL00001",
+  "Comments": null,
   "DocDate": "2026-05-27T00:00:00",
   "DocDueDate": "2026-05-27T00:00:00",
   "DiscountPercent": 30.000000,

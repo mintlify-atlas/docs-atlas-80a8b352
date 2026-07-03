@@ -9,20 +9,23 @@ description: "Configure Windows Task Scheduler to run MCH_IC.exe automatically o
 ## How Console Hiding Works
 
 ```csharp
-class OcultarConsola
+namespace Inter_Hechiz.tools
 {
-    [DllImport("kernel32.dll")]
-    static extern IntPtr GetConsoleWindow();
-
-    [DllImport("user32.dll")]
-    static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
-
-    const int HIDE = 0;
-    const int SHOW = 5;
-
-    public static void DisappearConsole()
+    class OcultarConsola
     {
-        ShowWindow(GetConsoleWindow(), HIDE);
+        [DllImport("kernel32.dll")]
+        static extern IntPtr GetConsoleWindow();
+
+        [DllImport("user32.dll")]
+        static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+
+        const int HIDE = 0;
+        const int SHOW = 5;
+
+        public static void DisappearConsole()
+        {
+            ShowWindow(GetConsoleWindow(), HIDE);
+        }
     }
 }
 ```
@@ -108,7 +111,7 @@ The steps below create a repeating task that runs `MCH_IC.exe` without showing a
 
 ## Legacy Scheduler Configuration in `config.ini`
 
-Early builds of Hechizo included an internal scheduler that read timing parameters from `config.ini`. That section is still present in the Debug configuration file:
+Early builds of Hechizo included an internal scheduler that read timing parameters from `config.ini`. That section is present only in the x86 Debug build configuration file (`MCH_IC/bin/Debug/config.ini`):
 
 ```ini
 [MyScheduler]
@@ -123,7 +126,9 @@ CadaXMinutos=1
 | `MinutosInicio` | Minute offset for the first run |
 | `CadaXMinutos` | Repeat interval in minutes |
 
-This section is **not active in the current build**. The application delegates all scheduling to the OS-level Task Scheduler. The `[MyScheduler]` keys are retained for reference but are ignored at runtime. Do not rely on them for production scheduling.
+<Warning>
+The `[MyScheduler]` section is **absent from the production configuration file** (`MCH_IC/bin/x64/Debug/config.ini`). That file contains only `[ServiceLayer]`, `[ConexionHanaProd]`, and `[CodSocio]` sections. The internal scheduler was never carried forward to the x64 production build. The application delegates all scheduling to the OS-level Task Scheduler. Do not rely on `[MyScheduler]` keys for production scheduling.
+</Warning>
 
 ---
 

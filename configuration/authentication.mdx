@@ -29,13 +29,13 @@ return _sToken = $"Basic {authToken}";
 
 The raw string that gets Base64-encoded looks like this before encoding:
 
-```
+```text
 {"UserName":"Hechizo06","CompanyDB":"10071_DEPORTES_SUR"}:ZEL=-n0nrh=x}
 ```
 
 The resulting header value is then:
 
-```
+```text
 Basic eyJVc2VyTmFtZSI6IkhlY2hpem8wNiIsIkNvbXBhbnlEQiI6IjEwMDcxX0RFUE9SVEVTX1NVUiJ9OlpFTD0tbjBucmg9eH0=
 ```
 
@@ -62,7 +62,7 @@ _pass = IniFil.LeerINI("ConexionHanaProd", "PassSL")
     ?? throw new ArgumentNullException("*PassSL no configurado en el archivo config*");
 ```
 
-If either key is missing, `CrearToken` throws immediately and the static field initialiser for that token catches the exception, logs it, and stores an empty string.
+If either key is missing from `config.ini`, `LeerINI` returns an empty string rather than `null`, so the `?? throw` guard does not fire in practice — `_user` and `_pass` will be empty strings, and the resulting token will be malformed. The sync methods will then receive HTTP 401 responses from the Service Layer and silently skip that company.
 
 ---
 
@@ -120,16 +120,16 @@ Data.Intercompany.Fabricante(Conexion.BD_central, Conexion.token_central);
 Data.Intercompany.Fabricante(Conexion.BD_desampa, Conexion.token_desampa);
 ```
 
-Inside `Intercompany.cs`, the token is attached to the HTTP request as follows (representative pattern across all sync methods):
+Inside `Intercompany.cs`, the token is attached to the HTTP request by `EnviaSapPorBasicAuth`, the shared helper that handles all Service Layer calls:
 
 ```csharp
-public static void Fabricante(string bdDestino, string Tokendestino)
+public static int EnviaSapPorBasicAuth(
+    string Metodo, JObject JsonObject, string URL, string toctoc, string Usar = "Y")
 {
-    // ...build JSON payload...
-    HttpWebRequest request = (HttpWebRequest)WebRequest.Create(url);
-    request.Method = "POST";
-    request.Headers["Authorization"] = Tokendestino;
+    var request = (HttpWebRequest)WebRequest.Create(URL);
+    request.Method = Metodo;
     request.ContentType = "application/json";
+    request.Headers.Add("Authorization", toctoc);
     // ...write body and read response...
 }
 ```
@@ -180,8 +180,8 @@ Because `RemoteSSLTLSCertificateValidate` accepts all certificates, the applicat
 
 In addition to Service Layer REST calls, the application connects directly to SAP HANA via ODBC to run cross-schema SQL queries (to identify master-data gaps). The connection string is assembled at startup from `[ConexionHanaProd]` keys:
 
-```
-DRIVER={HDBODBC}; SERVERNODE=hana-007:30015; UID=SYSTEM; PWD=<your_hana_password>
+```text
+DRIVER={HDBODBC}; SERVERNODE=hana-007:30015;  UID=SYSTEM; PWD=<your_hana_password>
 ```
 
 This string is stored in `Conexion.strCon` and reused for every `OdbcConnection` throughout the process lifetime. The HANA `SYSTEM` user provides cross-schema read access to all company databases registered under `[ConexionHanaProd]`.
