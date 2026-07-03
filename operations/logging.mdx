@@ -1,0 +1,154 @@
+---
+title: "Log Files and Audit Trails in Hechizo Intercompany"
+sidebarTitle: "Logging"
+description: "Understand the two log file types produced by Hechizo SAP Intercompany: daily operation logs and JSON payload logs for Service Layer audit trails."
+---
+
+Hechizo SAP Intercompany produces two complementary log file series on every run. The first captures human-readable operation results and caught exceptions in real time; the second records the exact JSON payloads sent to the SAP Business One Service Layer for every document posted. Together they give operators a full audit trail — from high-level success or failure down to the precise HTTP body that was dispatched — without requiring any database query or debugger.
+
+## Log File Types
+
+<CardGroup cols={2}>
+  <Card title="Operation Log" icon="file-lines">
+    `Log/Log_YYYYMMDD.txt` — human-readable timestamps, success confirmations, and exception messages
+  </Card>
+  <Card title="JSON Payload Log" icon="brackets-curly">
+    `Log/LogJson_YYYYMMDD.txt` — full JSON body sent to Service Layer for each document
+  </Card>
+</CardGroup>
+
+---
+
+## Operation Logs (`Log_YYYYMMDD.txt`)
+
+The operation log is the primary diagnostic surface for monitoring a sync run. Every significant action — whether a business partner was created, a document was posted, or an exception was caught — is appended to it in chronological order.
+
+**Written by:** `RegistroLog.Graba(string strLog)`
+
+**Location:** `Log\` subdirectory next to `MCH_IC.exe` (resolved via `AppDomain.CurrentDomain.BaseDirectory`)
+
+**Rotation:** One file per calendar day, named `Log_YYYYMMDD.txt`. A new file is created automatically on the first write after midnight; previous days' files are never truncated.
+
+**Contents:** Success confirmations with timestamps, error descriptions from caught exceptions, ODBC driver error messages, and `@SINCROERROR` table operation results.
+
+### Real Entries from `Log_20260113.txt`
+
+```text
+Cliente Creado : CL00009/ Hora: 11:28:31 AM
+Cliente Creado : CL00009/ Hora: 11:28:36 AM
+[03-13-13] Error SINCROERROR: ERROR [IM002] [Microsoft][ODBC Driver Manager] Data source name not found and no default driver specified
+[15: 13:24 PM]Crendo la solicCompra, ERROR [IM002] [Microsoft][ODBC Driver Manager] Data source name not found and no default driver specified
+[15: 13:24 PM]Error al OrdVenta, ERROR [IM002] [Microsoft][ODBC Driver Manager] Data source name not found and no default driver specified
+[15: 13:24 PM]Error en Orden Compra, ERROR [IM002] [Microsoft][ODBC Driver Manager] Data source name not found and no default driver specified
+[17:07:39 PM] Error creando la NC de proveedor en 10071_OMDO_TEST con el docNum factura deudor 8: No matching records found (ODBC -2028)
+```
+
+The timestamp format is embedded directly in the log string by each calling method (typically `DateTime.Now.ToString("HH:mm:ss tt")`), so it appears inline with the message rather than as a separate prefix column.
+
+<Note>
+If the `Log\` directory cannot be created or written to — for example due to a permissions error on the deployment path — the `RegistroLog.Graba()` method falls back to appending to `C:\Temp\log_fatal.txt`. Check that path if no `Log_YYYYMMDD.txt` file appears after a run.
+</Note>
+
+---
+
+## JSON Payload Logs (`LogJson_YYYYMMDD.txt`)
+
+Whenever a document is about to be posted to the Service Layer, Hechizo serializes the full request body and writes it to the JSON payload log before (or alongside) the HTTP call. This makes it possible to inspect the exact data that was sent, independent of what the Service Layer accepted or rejected.
+
+**Written by:** `RegistroLog.GrabaJson(string strLog)`
+
+**Location:** `Log\` subdirectory next to `MCH_IC.exe` — the same directory as the operation log
+
+**Rotation:** One file per calendar day, named `LogJson_YYYYMMDD.txt`
+
+**Contents:** Each entry is prefixed with a context header showing the origin database, source document entry and number, destination database and destination entry, followed by the full JSON object.
+
+### Real Entry from `LogJson_20260527.txt`
+
+```json
+[11:00:48 AM] BDOrigen: 10071_HECHIZO_DEP DEntryOrg 2458, DNumOrg 1509 / BDDestino 10071_3_102_956112, DEntryDest 33 / Json: {
+  "U_DocEntryOrigen": 2458,
+  "U_DocNumOrigen": 1509,
+  "CardCode": "PL00001",
+  "Comments": null,
+  "DocDate": "2026-05-27T00:00:00",
+  "DocDueDate": "2026-05-27T00:00:00",
+  "DiscountPercent": 30.000000,
+  "DocTotal": 1428656.580000,
+  "TaxDate": "2026-05-27T00:00:00",
+  "DocCur": "COL",
+  "DocRate": 1.000000,
+  "PaymentGroupCode": 6,
+  "TransportationCode": -1,
+  "U_OrigenIntercompany": "10071_HECHIZO_DEP",
+  "DocumentLines": [
+    {
+      "ItemCode": "JF-C2-AZ-10",
+      "Quantity": 2.000000,
+      "TaxCode": "IVA13",
+      "LineTotal": 17930.000000,
+      "UnitPrice": 8965.000000
+    },
+    ...
+  ]
+}
+```
+
+The context header format is: `[HH:mm:ss AM/PM] BDOrigen: <source_db> DEntryOrg <DocEntry>, DNumOrg <DocNum> / BDDestino <dest_db>, DEntryDest <dest_entry> / Json: {…}`. This cross-references a specific payload with the corresponding operation log entry.
+
+<Tip>
+To replay a failed document post, copy the JSON object from the payload log (everything after `Json: `) into a REST client such as Postman. Set the method to `POST`, the URL to the appropriate Service Layer endpoint (e.g., `https://<host>:50000/b1s/v1/PurchaseInvoices`), add a valid `B1SESSION` cookie, and submit. The Service Layer will return the exact error that caused the original failure — or create the document if the condition has since been resolved.
+</Tip>
+
+---
+
+## The `RegistroLog` Class
+
+Both log files are produced by the `RegistroLog` class in `MCH_IC/Tools/RegistroLog.cs`. A single static instance is created at the top of the `Intercompany` data class and reused throughout the process:
+
+```csharp
+public class RegistroLog
+{
+    // Writes a line to Log/Log_YYYYMMDD.txt
+    // Falls back to C:\Temp\log_fatal.txt on any IO exception
+    public void Graba(string strLog)
+
+    // Writes a line to Log/LogJson_YYYYMMDD.txt
+    // Falls back to C:\Temp\log_fatal.txt on any IO exception
+    public void GrabaJson(string strLog)
+
+    // Writes to LogProcesos/LogProc.txt (legacy, non-rotating)
+    // Returns 0 on success; exceptions are silently swallowed
+    public int GrabaProc(string strLog)
+}
+```
+
+The `GrabaProc` method and its companion static class `RegistroProcesos.LogProcesos()` write to `LogProcesos\LogProc.txt` — a single non-rotating file next to the executable. This path is a legacy mechanism from earlier builds and is no longer the primary log surface. Prefer `Log_YYYYMMDD.txt` and `LogJson_YYYYMMDD.txt` for day-to-day operations.
+
+---
+
+## Log Directory Layout
+
+After several runs the `Log\` folder alongside `MCH_IC.exe` will look like this:
+
+```text
+MCH_IC.exe
+config.ini
+Log\
+    Log_20260113.txt
+    Log_20260527.txt
+    LogJson_20260527.txt
+LogProcesos\
+    LogProc.txt          ← legacy, rarely used
+```
+
+<Accordion title="Log vs. LogJson — When to use each">
+| Goal | File to check |
+|---|---|
+| Did a specific business partner or document sync successfully? | `Log_YYYYMMDD.txt` |
+| What ODBC or Service Layer error was returned? | `Log_YYYYMMDD.txt` |
+| What exact JSON did Hechizo send to the Service Layer? | `LogJson_YYYYMMDD.txt` |
+| Is a field mapped incorrectly (wrong value in the payload)? | `LogJson_YYYYMMDD.txt` |
+| Replay a failed HTTP POST manually in Postman | `LogJson_YYYYMMDD.txt` |
+| Fatal crash where even the Log folder write failed | `C:\Temp\log_fatal.txt` |
+</Accordion>

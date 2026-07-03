@@ -1,0 +1,206 @@
+---
+title: "Hechizo Intercompany Architecture and Data Flow"
+sidebarTitle: "Architecture"
+description: "Understand the hub-and-spoke design, component layout, and execution sequence of the Hechizo SAP Intercompany synchronization engine."
+---
+
+Hechizo SAP Intercompany is built around a hub-and-spoke topology where `10071_HECHIZO_DEP` (Hechizo) acts as the authoritative source for master data and the clearinghouse for all commercial document flows. The engine connects to all ten SAP Business One companies simultaneously at startup — generating one Basic Auth token per company — and then drives a fixed, deterministic sequence of synchronization phases without any user interaction. Understanding the component layout and execution order is essential for diagnosing failures, extending the sync to new entity types, or onboarding an additional branch company.
+
+## Hub-and-Spoke Data Model
+
+```
+                        ┌─────────────────────────┐
+                        │   10071_HECHIZO_DEP      │
+                        │   (Hub / ORIGEN)         │
+                        │  Master data origin      │
+                        │  Sales order clearinghouse│
+                        │  AR invoice source       │
+                        └────────────┬────────────┘
+                 ┌───────────────────┼───────────────────┐
+          ┌──────▼──────┐     ┌──────▼──────┐    ┌──────▼──────┐
+          │   sur       │     │   omdo      │    │   nedn      │
+          │   hogar     │     │   flores    │    │   vital     │
+          │   emde      │     │   central   │    │   desampa   │
+          └─────────────┘     └─────────────┘    └─────────────┘
+                           (9 branch companies)
+```
+
+**Master data** flows exclusively from Hechizo → branches. Item manufacturers, item groups, business partner groups, payment terms, GL accounts, discount groups, salespeople, and employees are all mastered in Hechizo and pushed outward.
+
+**Business partners** are synced in a full mesh: every company's partner catalog is replicated to every other company. This is required so that intercompany invoices and payments resolve to valid business partner records on both sides of each transaction.
+
+**Commercial documents** follow the purchase-to-pay lifecycle:
+1. A branch creates a **purchase request** → synced to Hechizo as a purchase request.
+2. Hechizo converts the purchase request to a **sales order** (internal Hechizo operation).
+3. The sales order is converted back to a **purchase order** in the originating branch.
+4. Hechizo issues an **AR invoice** → mirrored as an **AP invoice** in the branch.
+5. **Incoming payments** recorded in any company are replicated to every other company.
+
+## Company Identifiers
+
+All ten SAP database names are read from `config.ini` at startup. These identifiers are passed directly to the Service Layer as the `CompanyDB` field in every Basic Auth token.
+
+```ini
+ORIGEN=10071_HECHIZO_DEP
+sur=10071_DEPORTES_SUR
+omdo=10071_OMDO
+nedn=10071_NEDN
+hogar=10071_HOGAR_IDEAL
+flores=10071_FLORES_DEP
+vital=10071_ENC_VITAL
+emde=10071_EMDE
+central=10071_AVECENTRAL
+desampa=10071_3_102_956112
+```
+
+## Component Layout
+
+<CardGroup cols={2}>
+  <Card title="Entry Point" icon="play">
+    **`Program.cs`** — contains the single `Main()` entry point. It calls `OcultarConsola.DisappearConsole()` first, then invokes all sync methods on `Data.Intercompany` in a strict sequential order. No parallelism is used; every operation completes before the next begins.
+  </Card>
+  <Card title="Connection & Auth" icon="key">
+    **`Data/Conexion.cs`** — reads `config.ini` at class-initialization time and materializes ten Basic Auth tokens (one per company) plus an HANA ODBC connection string. All tokens and database-name strings are exposed as `public static` fields consumed by `Program.cs`.
+  </Card>
+  <Card title="Sync Engine" icon="gears">
+    **`Data/Intercompany.cs`** — the core of the application. Contains all `static` sync methods (`Fabricante`, `GrupoArt`, `CreararticuloTODASV2`, `ProcesarSolictComp`, `ProcesarEnPagoRecibido`, etc.). Each method queries the source company via HANA ODBC, then POSTs or PATCHes records to the destination company via the Service Layer REST API.
+  </Card>
+  <Card title="Tools & Utilities" icon="wrench">
+    **`Tools/`** — supporting helpers consumed by both `Conexion` and `Intercompany`: `RegistroLog` (daily rolling log files), `IniFile` (INI config reader), `OcultarConsola` (Win32 `ShowWindow` wrapper), `LiberaMemoria` (GC flush), `gestorarchivos` (file mover), `RegistroProcesos` (process state tracking).
+  </Card>
+</CardGroup>
+
+### Authentication Architecture
+
+`Conexion.CrearToken(string _DB)` builds each company's Basic Auth token by:
+
+1. Reading `UserSL` and `PassSL` from `[ConexionHanaProd]` in `config.ini`.
+2. Constructing a JSON object: `{"UserName": "<UserSL>", "CompanyDB": "<database_name>"}`.
+3. Base64-encoding `<json_object>:<PassSL>`.
+4. Returning the string `"Basic <base64>"`.
+
+This token is sent as the `Authorization` header on every Service Layer request. A single SAP user credential unlocks all ten companies because the company database is encoded inside the token itself — the Service Layer uses it to determine which SAP B1 context to operate in.
+
+## Execution Sequence
+
+`Program.cs` drives the following phases in order. Each phase is a separate `#region` block in the source, making the sequence easy to audit.
+
+<Steps>
+  <Step title="Error Registry Initialization">
+    ```csharp
+    Data.Intercompany.SINCROERROR_V2();
+    ```
+    Initializes or resets the `@SINCROERROR` custom table in SAP. This runs before any sync work so that the error table is clean and ready to receive failures from the current cycle.
+  </Step>
+
+  <Step title="Master Data — Manufacturers, Item Groups, Business Partner Groups, Payment Terms">
+    ```csharp
+    // Repeated for all 9 branches:
+    Data.Intercompany.Fabricante(Conexion.BD_sur, Conexion.token_sur);
+    Data.Intercompany.GrupoArt(Conexion.BD_sur, Conexion.token_sur);
+    Data.Intercompany.GrupoSN(Conexion.BD_sur, Conexion.token_sur);
+    Data.Intercompany.condicionespago(Conexion.BD_sur, Conexion.token_sur);
+    ```
+    Four master-data entity types are pushed from Hechizo to each branch. Each method takes the destination company's database name and auth token as parameters.
+  </Step>
+
+  <Step title="Item Catalog — Create and Update">
+    ```csharp
+    Data.Intercompany.CreararticuloTODASV2("hogar");   // ... all 9 branches
+    Data.Intercompany.ActualizararticuloTODASV2("hogar"); // ... all 9 branches
+    ```
+    New items are created first across all branches, then a second pass updates existing items. The branch key string (`"hogar"`, `"sur"`, etc.) is used internally to look up the target database name and token.
+  </Step>
+
+  <Step title="Business Partners — Full Mesh Create and Update">
+    ```csharp
+    // Example: push hogar's partners to all other companies
+    Data.Intercompany.CrearSOCIOTODAS(Conexion.BD_hogar, Conexion.BD_omdo, Conexion.token_omdo);
+    // ... 72 total calls (each of 9 companies pushes to each of the other 8)
+    ```
+    Business partners are synced in a complete N×(N-1) matrix. Every company's partner list is created in every other company (72 create calls), followed by 72 update calls via `ActualizaSOCIOTODAS`. This ensures AR/AP linkages work correctly across all intercompany transactions.
+  </Step>
+
+  <Step title="Discount Groups, Salespeople, Employees">
+    ```csharp
+    Data.Intercompany.CrearGrupoDescuento(Conexion.BD_sur, Conexion.token_sur); // all 9
+    Data.Intercompany.Crearvendedores("hogar");     // all 9
+    Data.Intercompany.Actualizarvendedores("hogar"); // all 9
+    Data.Intercompany.CrearEmpleados("hogar");       // all 9
+    Data.Intercompany.ActualizarEmpleados("hogar");  // all 9
+    ```
+    Discount group definitions, salesperson records, and employee records are propagated from Hechizo to each branch, with separate create and update passes for salespeople and employees.
+  </Step>
+
+  <Step title="Purchase Flow — Request → Sales Order → Purchase Order">
+    ```csharp
+    // Step 1: branch purchase requests → Hechizo purchase requests
+    Data.Intercompany.ProcesarSolictComp("hogar", Conexion.token_hechizo); // all 9
+
+    // Step 2: Hechizo purchase requests → Hechizo sales orders (internal)
+    Data.Intercompany.ProcesarEnOrdVentaHechizo(Conexion.token_hechizo);
+
+    // Step 3: Hechizo sales orders → branch purchase orders
+    Data.Intercompany.ProcesarEnOrdCompra("hogar", Conexion.token_hogarn); // all 9
+
+    // Step 4: replicate sales order updates to branch purchase orders
+    Data.Intercompany.ActualizarEnOrdCompra("hogar", Conexion.token_hogarn); // all 9
+    ```
+    This four-step pipeline implements the full intercompany purchase-to-order cycle. `ProcesarEnOrdVentaHechizo` is the only step that operates entirely within Hechizo; all other steps cross company boundaries.
+  </Step>
+
+  <Step title="Invoices and Credit Notes">
+    ```csharp
+    // AR invoice (Hechizo) → AP invoice (branch)
+    Data.Intercompany.ProcesarFacturaProveEnSucursales("hogar", Conexion.token_hogarn); // all 9
+
+    // AR credit note (Hechizo) → AP credit note (branch)
+    Data.Intercompany.ProcesarNotasCredProveEnSucursales("hogar", Conexion.token_hogarn); // all 9
+
+    // Replicate invoice updates
+    Data.Intercompany.ActualizarEnFacturaProvee("hogar", Conexion.token_hogarn); // all 9
+
+    // Replicate credit note updates
+    Data.Intercompany.ActualizarEnNotaCredProvee("hogar", Conexion.token_hechizo); // all 9
+    ```
+    Each AR document issued by Hechizo produces a corresponding AP document in the destination branch. The `omdo` branch uses the `V1` variant of the credit note method (`ProcesarNotasCredProveEnSucursalesV1`) due to a schema difference in that company.
+  </Step>
+
+  <Step title="Chart of Accounts">
+    ```csharp
+    Data.Intercompany.ProcesarCuentasdesdeHechizoV2("hogar", Conexion.token_hogarn,
+        Data.Intercompany.ProcesoCuenta.Crear);      // all 9 — create pass
+    Data.Intercompany.ProcesarCuentasdesdeHechizoV2("hogar", Conexion.token_hogarn,
+        Data.Intercompany.ProcesoCuenta.Actualizar); // all 9 — update pass
+    ```
+    GL account records are created and then updated in all nine branches. The `ProcesoCuenta` enum controls which HTTP verb (`POST` vs `PATCH`) the method uses against the Service Layer.
+  </Step>
+
+  <Step title="Incoming Payments — Full Mesh">
+    ```csharp
+    // Example: payments from all companies → Hechizo
+    Data.Intercompany.ProcesarEnPagoRecibido(Conexion.BD_hogar, Conexion.BD_Hechizo, Conexion.token_hechizo);
+    // ... 90 total calls (each of 10 companies sends payments to each of the other 9)
+    ```
+    Incoming payment records are replicated in a full 10×9 matrix (90 calls total), ensuring that payment reconciliation in any company reflects payments recorded anywhere in the group. This is the final and most network-intensive phase.
+  </Step>
+</Steps>
+
+## Error Handling and Logging
+
+Every sync method catches exceptions internally and writes timestamped entries to `RegistroLog`. Errors also flow into `@SINCROERROR` via the custom table mechanism initialized in step 1. The flat-file logs use the naming convention `Log/Log_YYYYMMDD.txt` and roll daily.
+
+<Accordion title="Sample log entries">
+  ```
+  Cliente Creado : CL00009/ Hora: 11:28:31 AM
+  [15: 13:24 PM]Crendo la solicCompra, ERROR [IM002] [Microsoft][ODBC Driver Manager] Data source name not found and no default driver specified
+  [17:07:39 PM] Error creando la NC de proveedor en 10071_OMDO_TEST con el docNum factura deudor 8: No matching records found (ODBC -2028)
+  ```
+
+  - `ERROR [IM002] Data source name not found` → the `HDBODBC` driver is not installed or the `DSN` value in `config.ini` does not match the registered ODBC name.
+  - `No matching records found (ODBC -2028)` → the source document referenced by the sync method does not exist in the destination company; often caused by a base document that was deleted or never created correctly.
+</Accordion>
+
+<Warning>
+  Because all ten Basic Auth tokens are resolved as `public static` field initializers in `Conexion.cs`, any misconfigured `config.ini` entry (wrong password, unreachable Service Layer, missing database name) will cause a token to resolve to an empty string at class-load time. All subsequent calls using that token will fail silently with Service Layer 401 errors. Always verify token generation in the log before assuming a sync phase ran correctly.
+</Warning>

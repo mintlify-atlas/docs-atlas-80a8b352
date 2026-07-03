@@ -1,0 +1,207 @@
+---
+title: "Replicating Invoices, Credit Notes, and Payments"
+sidebarTitle: "Invoices & Payments"
+description: "How Hechizo AR invoices and credit notes are mirrored as AP documents in branch companies, and how incoming payments are synchronized across all company pairs."
+---
+
+Once purchase orders exist in a branch and the corresponding goods have been delivered, Hechizo raises AR invoices (FacturaDeudor) against each branch company. Hechizo SAP Intercompany automatically mirrors those invoices as AP invoices (FacturaProveedor) in the branch, closing the commercial loop between the hub and its subsidiaries. The same mirroring applies to AR credit notes. Incoming payments complete the cycle: because intercompany settlements can originate in any company and be received by any other, the payment sync covers every ordered pair across the entire 10-company network (Hechizo plus 9 branches), totaling 90 calls per execution cycle.
+
+<Note>
+  Duplicate prevention for all invoice, credit note, and payment documents is enforced by checking `U_DocEntryOrigen` before creating a new record. If a document with that origin `DocEntry` already exists in the destination company, the creation is skipped. This field is set on every document created by the sync application and must not be cleared or modified manually.
+</Note>
+
+---
+
+## AR Invoices → AP Invoices
+
+When Hechizo issues an AR invoice to a branch, `ProcesarFacturaProveEnSucursales` reads that invoice and creates the corresponding AP invoice in the branch, using the branch's own open purchase order as the base document. Lines carry `BaseType`, `BaseEntry`, and `BaseLine` references so SAP B1 correctly links the AP invoice to its purchase order.
+
+**Create**
+
+```csharp
+public static void ProcesarFacturaProveEnSucursales(string bdDestino, string tokenDestino)
+```
+
+Queries Hechizo's `OINV` / `INV1` tables for open, uncancelled invoices with `U_Estado = 'N'` whose `U_OrigenIntercompany` matches the branch database name or whose `CardCode` matches the branch's intercompany partner. For each invoice:
+
+1. Resolves the branch purchase order `DocEntry` that underlies the invoice's base sales order.
+2. Reads header and line data from the branch `OPOR` / `POR1` tables.
+3. Sets `U_DocEntryOrigen`, `U_DocNumOrigen`, and `U_OrigenIntercompany` on the new AP invoice.
+4. Posts to `PurchaseInvoices` on the branch Service Layer endpoint.
+5. Marks the Hechizo `OINV` record with `U_Estado = 'Y'` and stores the branch `DocEntry`/`DocNum`.
+
+```csharp
+Data.Intercompany.ProcesarFacturaProveEnSucursales("hogar",   Conexion.token_hogarn);
+Data.Intercompany.ProcesarFacturaProveEnSucursales("sur",     Conexion.token_sur);
+Data.Intercompany.ProcesarFacturaProveEnSucursales("omdo",    Conexion.token_omdo);
+Data.Intercompany.ProcesarFacturaProveEnSucursales("nedn",    Conexion.token_nedn);
+Data.Intercompany.ProcesarFacturaProveEnSucursales("flores",  Conexion.token_flores);
+Data.Intercompany.ProcesarFacturaProveEnSucursales("vital",   Conexion.token_vital);
+Data.Intercompany.ProcesarFacturaProveEnSucursales("emde",    Conexion.token_emde);
+Data.Intercompany.ProcesarFacturaProveEnSucursales("central", Conexion.token_central);
+Data.Intercompany.ProcesarFacturaProveEnSucursales("desampa", Conexion.token_desampa);
+```
+
+**Update**
+
+```csharp
+public static void ActualizarEnFacturaProvee(string bdDestino, string tokenDestino)
+```
+
+Picks up changes to open Hechizo AR invoices and patches the corresponding branch AP invoices via a Service Layer PATCH, keying on `U_DocEntryOrigen`.
+
+```csharp
+Data.Intercompany.ActualizarEnFacturaProvee("hogar",   Conexion.token_hogarn);
+Data.Intercompany.ActualizarEnFacturaProvee("sur",     Conexion.token_sur);
+Data.Intercompany.ActualizarEnFacturaProvee("omdo",    Conexion.token_omdo);
+Data.Intercompany.ActualizarEnFacturaProvee("nedn",    Conexion.token_nedn);
+Data.Intercompany.ActualizarEnFacturaProvee("flores",  Conexion.token_flores);
+Data.Intercompany.ActualizarEnFacturaProvee("vital",   Conexion.token_vital);
+Data.Intercompany.ActualizarEnFacturaProvee("emde",    Conexion.token_emde);
+Data.Intercompany.ActualizarEnFacturaProvee("central", Conexion.token_central);
+Data.Intercompany.ActualizarEnFacturaProvee("desampa", Conexion.token_desampa);
+```
+
+---
+
+## AR Credit Notes → AP Credit Notes
+
+Credit notes issued by Hechizo against a branch are mirrored as AP credit notes (NotaCredProveedor) in the branch using a symmetric create-then-update pattern. Two method variants exist to handle a historical schema difference in the `omdo` branch.
+
+**Create — standard branches**
+
+```csharp
+public static void ProcesarNotasCredProveEnSucursales(string bdDestino, string tokenDestino)
+```
+
+**Create — omdo legacy variant**
+
+```csharp
+public static void ProcesarNotasCredProveEnSucursalesV1(string bdDestino, string tokenDestino)
+```
+
+The V1 variant handles a legacy document structure specific to the `omdo` company database. All other branches use the standard method.
+
+```csharp
+Data.Intercompany.ProcesarNotasCredProveEnSucursales("hogar",    Conexion.token_hogarn);
+Data.Intercompany.ProcesarNotasCredProveEnSucursales("sur",      Conexion.token_sur);
+Data.Intercompany.ProcesarNotasCredProveEnSucursalesV1("omdo",   Conexion.token_omdo); // legacy
+Data.Intercompany.ProcesarNotasCredProveEnSucursales("nedn",     Conexion.token_nedn);
+Data.Intercompany.ProcesarNotasCredProveEnSucursales("flores",   Conexion.token_flores);
+Data.Intercompany.ProcesarNotasCredProveEnSucursales("vital",    Conexion.token_vital);
+Data.Intercompany.ProcesarNotasCredProveEnSucursales("emde",     Conexion.token_emde);
+Data.Intercompany.ProcesarNotasCredProveEnSucursales("central",  Conexion.token_central);
+Data.Intercompany.ProcesarNotasCredProveEnSucursales("desampa",  Conexion.token_desampa);
+```
+
+**Update**
+
+```csharp
+public static void ActualizarEnNotaCredProvee(string bdDestino, string tokenDestino)
+```
+
+Propagates updates from Hechizo AR credit notes to the corresponding branch AP credit notes.
+
+```csharp
+Data.Intercompany.ActualizarEnNotaCredProvee("hogar",   Conexion.token_hechizo);
+Data.Intercompany.ActualizarEnNotaCredProvee("sur",     Conexion.token_hechizo);
+Data.Intercompany.ActualizarEnNotaCredProvee("omdo",    Conexion.token_hechizo);
+Data.Intercompany.ActualizarEnNotaCredProvee("nedn",    Conexion.token_hechizo);
+Data.Intercompany.ActualizarEnNotaCredProvee("flores",  Conexion.token_hechizo);
+Data.Intercompany.ActualizarEnNotaCredProvee("vital",   Conexion.token_hechizo);
+Data.Intercompany.ActualizarEnNotaCredProvee("emde",    Conexion.token_hechizo);
+Data.Intercompany.ActualizarEnNotaCredProvee("central", Conexion.token_hechizo);
+Data.Intercompany.ActualizarEnNotaCredProvee("desampa", Conexion.token_desampa);
+```
+
+---
+
+## Incoming Payments
+
+```csharp
+public static void ProcesarEnPagoRecibido(string bdOrigen, string bdDestino, string tokenDestino)
+```
+
+Intercompany payments flow between all 10 companies (Hechizo + 9 branches) in both directions. `ProcesarEnPagoRecibido` reads incoming payments from `bdOrigen`'s `OVPM` table where `U_Intercompany = 'Y'`, `Canceled = 'N'`, `U_Estatus = 'N'`, and `U_DestinoIntercompany` matches `bdDestino`. It then constructs an `IncomingPayments` payload and posts it to `bdDestino`'s Service Layer.
+
+Key transformations applied during the process:
+- `U_OrigenIntercompany` is set to `bdOrigen` on the created payment.
+- `DocType` is forced to `rAccount` (account payment).
+- The destination bank account is sourced from `U_BancoDestino` on the origin payment.
+- The bank reference is sourced from `U_RefBancaria`.
+- For USD payments, the `TransferSum` and line amounts are divided by `DocRate` to convert to the functional currency.
+
+Payment lines are read from `VPM4` and included as `PaymentAccounts` in the JSON payload.
+
+**Example calls**
+
+```csharp
+// Each branch → Hechizo
+Data.Intercompany.ProcesarEnPagoRecibido(Conexion.BD_hogar, Conexion.BD_Hechizo, Conexion.token_hechizo);
+Data.Intercompany.ProcesarEnPagoRecibido(Conexion.BD_sur,   Conexion.BD_Hechizo, Conexion.token_hechizo);
+// ... 7 more branches → Hechizo
+
+// Hechizo → each branch
+Data.Intercompany.ProcesarEnPagoRecibido(Conexion.BD_Hechizo, Conexion.BD_hogar, Conexion.token_hogarn);
+Data.Intercompany.ProcesarEnPagoRecibido(Conexion.BD_Hechizo, Conexion.BD_sur,   Conexion.token_sur);
+// ... 7 more Hechizo → branch
+
+// Branch → every other branch (example: hogar receiving from all others)
+Data.Intercompany.ProcesarEnPagoRecibido(Conexion.BD_sur,    Conexion.BD_hogar, Conexion.token_hogarn);
+Data.Intercompany.ProcesarEnPagoRecibido(Conexion.BD_omdo,   Conexion.BD_hogar, Conexion.token_hogarn);
+// ... 7 more origins → hogar
+```
+
+The full call matrix covers 10 destination companies × 9 origins each = **90 calls** per cycle.
+
+---
+
+## Document payload structure
+
+The following is a real JSON payload captured from `LogJson_20260527.txt`, representing a purchase order created in branch `10071_3_102_956112` from Hechizo sales order 1509:
+
+```json
+{
+  "U_DocEntryOrigen": 2458,
+  "U_DocNumOrigen": 1509,
+  "CardCode": "PL00001",
+  "DocDate": "2026-05-27T00:00:00",
+  "DocDueDate": "2026-05-27T00:00:00",
+  "DiscountPercent": 30.000000,
+  "DocTotal": 1428656.580000,
+  "TaxDate": "2026-05-27T00:00:00",
+  "DocCur": "COL",
+  "DocRate": 1.000000,
+  "PaymentGroupCode": 6,
+  "TransportationCode": -1,
+  "U_OrigenIntercompany": "10071_HECHIZO_DEP",
+  "DocumentLines": [
+    {
+      "ItemCode": "JF-C2-AZ-10",
+      "Quantity": 2.000000,
+      "TaxCode": "IVA13",
+      "LineTotal": 17930.000000,
+      "UnitPrice": 8965.000000
+    }
+  ]
+}
+```
+
+`U_DocEntryOrigen` and `U_DocNumOrigen` store the Hechizo-side document keys. `U_OrigenIntercompany` holds the full HANA schema name of the source company. These three fields together form the cross-company document reference that all subsequent update and duplicate-check operations rely on.
+
+---
+
+## UDF reference for invoices and payments
+
+| UDF | Table | Purpose |
+|---|---|---|
+| `U_Estado` | `OINV`, `ORIN` | Processing flag: `'N'` = pending, `'Y'` = processed |
+| `U_Estatus` | `OVPM` | Payment processing flag: `'N'` = pending, `'Y'` = processed |
+| `U_DocEntryOrigen` | `OPCH`, `ORPC`, `OVPM` | `DocEntry` of the source document in the origin company |
+| `U_DocNumOrigen` | `OPCH`, `ORPC`, `OVPM` | Human-readable `DocNum` of the source document |
+| `U_OrigenIntercompany` | `OINV`, `ORIN`, `OPCH`, `ORPC`, `OVPM` | Full HANA database name of the originating company |
+| `U_Intercompany` | `OVPM` | Marks a payment as an intercompany payment eligible for sync (`'Y'`) |
+| `U_DestinoIntercompany` | `OVPM` | Full HANA database name of the intended payment destination |
+| `U_BancoDestino` | `OVPM` | Bank account code to use in the destination company |
+| `U_RefBancaria` | `OVPM` | Bank transfer reference number |
+| `U_ComentarioError` | All document tables | Service Layer error message on failed sync attempts |

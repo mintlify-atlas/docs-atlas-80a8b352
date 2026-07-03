@@ -1,0 +1,327 @@
+---
+title: "Synchronizing Master Data Across SAP B1 Companies"
+sidebarTitle: "Master Data"
+description: "Learn how Hechizo SAP Intercompany replicates manufacturers, item groups, business partner groups, payment terms, items, discount groups, salespeople, and employees."
+---
+
+Master data synchronization is the foundation of the intercompany process. Before any transactional document is created or updated, Hechizo SAP Intercompany ensures that all reference data — manufacturers, item groups, business partner groups, payment terms, items, discount groups, salespeople, and employees — is consistent across the entire company landscape. Most entities flow in a single direction: from the Hechizo hub database outward to all nine branch companies. Items are the notable exception: each branch can act as an origin, broadcasting new and updated article definitions to every other company in the network using the branch's key string. Business partners follow the same peer-to-peer model, with every ordered company pair (9 × 8 = 72 combinations) covered in both the create and update passes.
+
+<Note>
+  Master data synchronization runs at the **very start** of each execution cycle, before any purchase requests, orders, invoices, credit notes, or payments are processed. This guarantees that every item code, business partner group, and payment term referenced by a subsequent document already exists in the destination company.
+</Note>
+
+## Company keys
+
+Each of the nine branch databases is identified throughout the codebase by a short key string. These keys are passed as the `bdDestino` or `bdOrigen` arguments to every sync method.
+
+| Key | Conexion constant |
+|---|---|
+| `hogar` | `Conexion.BD_hogar` |
+| `sur` | `Conexion.BD_sur` |
+| `omdo` | `Conexion.BD_omdo` |
+| `nedn` | `Conexion.BD_nedn` |
+| `flores` | `Conexion.BD_flores` |
+| `vital` | `Conexion.BD_vital` |
+| `emde` | `Conexion.BD_emde` |
+| `central` | `Conexion.BD_central` |
+| `desampa` | `Conexion.BD_desampa` |
+
+The Hechizo hub is never listed as `bdDestino` for master data — it is always the authoritative source.
+
+---
+
+## Entity reference
+
+<Accordion title="Fabricante — Manufacturers">
+
+**Method signature**
+
+```csharp
+public static void Fabricante(string bdDestino, string Tokendestino)
+```
+
+**What it does**
+
+Queries the `OMRC` table in Hechizo via HANA and compares manufacturer names against the same table in `bdDestino`. Any `FirmName` present in Hechizo but absent in the branch is posted to the branch's Service Layer endpoint as a new manufacturer record.
+
+**How it is called**
+
+```csharp
+Data.Intercompany.Fabricante(Conexion.BD_sur, Conexion.token_sur);
+Data.Intercompany.Fabricante(Conexion.BD_omdo, Conexion.token_omdo);
+Data.Intercompany.Fabricante(Conexion.BD_nedn, Conexion.token_nedn);
+Data.Intercompany.Fabricante(Conexion.BD_hogar, Conexion.token_hogarn);
+Data.Intercompany.Fabricante(Conexion.BD_flores, Conexion.token_flores);
+Data.Intercompany.Fabricante(Conexion.BD_vital, Conexion.token_vital);
+Data.Intercompany.Fabricante(Conexion.BD_emde, Conexion.token_emde);
+Data.Intercompany.Fabricante(Conexion.BD_central, Conexion.token_central);
+Data.Intercompany.Fabricante(Conexion.BD_desampa, Conexion.token_desampa);
+```
+
+Called once per branch — nine calls total, all reading from Hechizo as the source.
+
+</Accordion>
+
+<Accordion title="GrupoArt — Item Groups">
+
+**Method signature**
+
+```csharp
+public static void GrupoArt(string bdDestino, string TokenDestino)
+```
+
+**What it does**
+
+Compares item group names (`ItmsGrpNam`) from Hechizo's `OITB` table against the destination branch. Missing groups are created in the branch via a Service Layer POST to the `ItemGroups` endpoint.
+
+**How it is called**
+
+```csharp
+Data.Intercompany.GrupoArt(Conexion.BD_sur, Conexion.token_sur);
+Data.Intercompany.GrupoArt(Conexion.BD_omdo, Conexion.token_omdo);
+Data.Intercompany.GrupoArt(Conexion.BD_nedn, Conexion.token_nedn);
+Data.Intercompany.GrupoArt(Conexion.BD_hogar, Conexion.token_hogarn);
+Data.Intercompany.GrupoArt(Conexion.BD_flores, Conexion.token_flores);
+Data.Intercompany.GrupoArt(Conexion.BD_vital, Conexion.token_vital);
+Data.Intercompany.GrupoArt(Conexion.BD_emde, Conexion.token_emde);
+Data.Intercompany.GrupoArt(Conexion.BD_central, Conexion.token_central);
+Data.Intercompany.GrupoArt(Conexion.BD_desampa, Conexion.token_desampa);
+```
+
+</Accordion>
+
+<Accordion title="GrupoSN — Business Partner Groups">
+
+**Method signature**
+
+```csharp
+public static void GrupoSN(string bdDestino, string TokenDestino)
+```
+
+**What it does**
+
+Reads business partner groups (`OCRG`) from Hechizo — including both the `GroupName` and `GroupType` fields — and creates any missing groups in the destination branch. Both customer and vendor group types are handled.
+
+**How it is called**
+
+```csharp
+Data.Intercompany.GrupoSN(Conexion.BD_sur, Conexion.token_sur);
+Data.Intercompany.GrupoSN(Conexion.BD_omdo, Conexion.token_omdo);
+Data.Intercompany.GrupoSN(Conexion.BD_nedn, Conexion.token_nedn);
+Data.Intercompany.GrupoSN(Conexion.BD_hogar, Conexion.token_hogarn);
+Data.Intercompany.GrupoSN(Conexion.BD_flores, Conexion.token_flores);
+Data.Intercompany.GrupoSN(Conexion.BD_vital, Conexion.token_vital);
+Data.Intercompany.GrupoSN(Conexion.BD_emde, Conexion.token_emde);
+Data.Intercompany.GrupoSN(Conexion.BD_central, Conexion.token_central);
+Data.Intercompany.GrupoSN(Conexion.BD_desampa, Conexion.token_desampa);
+```
+
+</Accordion>
+
+<Accordion title="condicionespago — Payment Terms">
+
+**Method signature**
+
+```csharp
+public static void condicionespago(string bdDestino, string TokenDestino)
+```
+
+**What it does**
+
+Reads payment term definitions from Hechizo's `OCTG` table (`PymntGroup`, `PayDuMonth`, `ExtraDays`) and creates any that are missing in the branch. This ensures that when invoices or orders reference a payment group code, that code exists in the branch before the document arrives.
+
+**How it is called**
+
+```csharp
+Data.Intercompany.condicionespago(Conexion.BD_sur, Conexion.token_sur);
+Data.Intercompany.condicionespago(Conexion.BD_omdo, Conexion.token_omdo);
+Data.Intercompany.condicionespago(Conexion.BD_nedn, Conexion.token_nedn);
+Data.Intercompany.condicionespago(Conexion.BD_hogar, Conexion.token_hogarn);
+Data.Intercompany.condicionespago(Conexion.BD_flores, Conexion.token_flores);
+Data.Intercompany.condicionespago(Conexion.BD_vital, Conexion.token_vital);
+Data.Intercompany.condicionespago(Conexion.BD_emde, Conexion.token_emde);
+Data.Intercompany.condicionespago(Conexion.BD_central, Conexion.token_central);
+Data.Intercompany.condicionespago(Conexion.BD_desampa, Conexion.token_desampa);
+```
+
+</Accordion>
+
+<Accordion title="Items (Articles) — CreararticuloTODASV2 / ActualizararticuloTODASV2">
+
+**Method signatures**
+
+```csharp
+public static Respuesta CreararticuloTODASV2(string bdDestino)
+public static Respuesta ActualizararticuloTODASV2(string bdDestino)
+```
+
+**What it does**
+
+Unlike the other master data entities, items use a peer-to-peer model rather than a hub-and-spoke model. Each branch is passed as `bdDestino`, which serves as the **origin** for that particular call — the method reads newly created or modified items from that branch's database and propagates them to all other companies in the network.
+
+`CreararticuloTODASV2` creates items that do not yet exist in each peer company. `ActualizararticuloTODASV2` patches existing items with updated field values.
+
+**How it is called**
+
+```csharp
+// Create pass — each branch acts as origin
+Data.Intercompany.CreararticuloTODASV2("hogar");
+Data.Intercompany.CreararticuloTODASV2("sur");
+Data.Intercompany.CreararticuloTODASV2("omdo");
+Data.Intercompany.CreararticuloTODASV2("nedn");
+Data.Intercompany.CreararticuloTODASV2("flores");
+Data.Intercompany.CreararticuloTODASV2("vital");
+Data.Intercompany.CreararticuloTODASV2("emde");
+Data.Intercompany.CreararticuloTODASV2("central");
+Data.Intercompany.CreararticuloTODASV2("desampa");
+
+// Update pass — same pattern
+Data.Intercompany.ActualizararticuloTODASV2("hogar");
+Data.Intercompany.ActualizararticuloTODASV2("sur");
+// ... all 9 branches
+```
+
+</Accordion>
+
+<Accordion title="Socios de Negocios — Business Partners">
+
+**Method signatures**
+
+```csharp
+public static void CrearSOCIOTODAS(string bdOrigen, string bdDestino, string TokenDestino)
+public static void ActualizaSOCIOTODAS(string bdOrigen, string bdDestino, string TokenDestino)
+```
+
+**What it does**
+
+Business partners are synchronized across all company pairs in a full peer-to-peer mesh. `CrearSOCIOTODAS` reads new business partners from `bdOrigen` and creates them in `bdDestino`. `ActualizaSOCIOTODAS` updates existing records. Because no single company is the authority for business partners, every ordered pair is covered: 9 × 8 = **72 calls** for create and **72 calls** for update, for a total of 144 calls in this section alone.
+
+**How it is called (excerpt)**
+
+```csharp
+// All partners from hogar → every other branch
+Data.Intercompany.CrearSOCIOTODAS(Conexion.BD_hogar, Conexion.BD_omdo, Conexion.token_omdo);
+Data.Intercompany.CrearSOCIOTODAS(Conexion.BD_hogar, Conexion.BD_sur, Conexion.token_sur);
+Data.Intercompany.CrearSOCIOTODAS(Conexion.BD_hogar, Conexion.BD_nedn, Conexion.token_nedn);
+// ... 5 more destinations for hogar
+
+// All partners from sur → every other branch
+Data.Intercompany.CrearSOCIOTODAS(Conexion.BD_sur, Conexion.BD_hogar, Conexion.token_hogarn);
+Data.Intercompany.CrearSOCIOTODAS(Conexion.BD_sur, Conexion.BD_omdo, Conexion.token_omdo);
+// ... continued for all 9 origins
+
+// Update pass follows the same 72-pair structure
+Data.Intercompany.ActualizaSOCIOTODAS(Conexion.BD_hogar, Conexion.BD_omdo, Conexion.token_omdo);
+// ...
+```
+
+</Accordion>
+
+<Accordion title="Grupos de Descuento — Discount Groups">
+
+**Method signature**
+
+```csharp
+public static Respuesta CrearGrupoDescuento(string bdDestino, string TokenDetino)
+```
+
+**What it does**
+
+Replicates discount group definitions from Hechizo to each branch company. Discount groups must exist in a branch before business partners or items referencing them can be synchronized correctly. Only creation is performed in the active code path; the `ActualizarGrupoDescuentoV2` variant is present in the source but is commented out in the current production flow.
+
+**How it is called**
+
+```csharp
+Data.Intercompany.CrearGrupoDescuento(Conexion.BD_sur, Conexion.token_sur);
+Data.Intercompany.CrearGrupoDescuento(Conexion.BD_omdo, Conexion.token_omdo);
+Data.Intercompany.CrearGrupoDescuento(Conexion.BD_nedn, Conexion.token_nedn);
+Data.Intercompany.CrearGrupoDescuento(Conexion.BD_hogar, Conexion.token_hogarn);
+Data.Intercompany.CrearGrupoDescuento(Conexion.BD_flores, Conexion.token_flores);
+Data.Intercompany.CrearGrupoDescuento(Conexion.BD_vital, Conexion.token_vital);
+Data.Intercompany.CrearGrupoDescuento(Conexion.BD_emde, Conexion.token_emde);
+Data.Intercompany.CrearGrupoDescuento(Conexion.BD_central, Conexion.token_central);
+Data.Intercompany.CrearGrupoDescuento(Conexion.BD_desampa, Conexion.token_desampa);
+```
+
+</Accordion>
+
+<Accordion title="Vendedores — Salespeople">
+
+**Method signatures**
+
+```csharp
+public static Respuesta Crearvendedores(string bdDestino)
+public static Respuesta Actualizarvendedores(string bdDestino)
+```
+
+**What it does**
+
+Creates and updates salesperson records across all nine branches. The source of truth is the Hechizo hub. `Crearvendedores` adds any salesperson codes not yet present in the branch; `Actualizarvendedores` patches existing entries to keep names and related data current.
+
+**How it is called**
+
+```csharp
+// Create pass
+Data.Intercompany.Crearvendedores("hogar");
+Data.Intercompany.Crearvendedores("sur");
+Data.Intercompany.Crearvendedores("omdo");
+Data.Intercompany.Crearvendedores("nedn");
+Data.Intercompany.Crearvendedores("flores");
+Data.Intercompany.Crearvendedores("vital");
+Data.Intercompany.Crearvendedores("emde");
+Data.Intercompany.Crearvendedores("central");
+Data.Intercompany.Crearvendedores("desampa");
+
+// Update pass
+Data.Intercompany.Actualizarvendedores("hogar");
+// ... all 9 branches
+```
+
+</Accordion>
+
+<Accordion title="Empleados — Employees">
+
+**Method signatures**
+
+```csharp
+public static Respuesta CrearEmpleados(string bdDestino)
+public static Respuesta ActualizarEmpleados(string bdDestino)
+```
+
+**What it does**
+
+Replicates employee records from Hechizo to all branch companies. Employee IDs are used in purchase request headers (the `Requester` field maps to `OHEM.empID`) so employees must exist in every database before purchase request sync runs. `CrearEmpleados` inserts missing records; `ActualizarEmpleados` patches changed fields.
+
+**How it is called**
+
+```csharp
+// Create pass
+Data.Intercompany.CrearEmpleados("hogar");
+Data.Intercompany.CrearEmpleados("sur");
+Data.Intercompany.CrearEmpleados("omdo");
+Data.Intercompany.CrearEmpleados("nedn");
+Data.Intercompany.CrearEmpleados("flores");
+Data.Intercompany.CrearEmpleados("vital");
+Data.Intercompany.CrearEmpleados("emde");
+Data.Intercompany.CrearEmpleados("central");
+Data.Intercompany.CrearEmpleados("desampa");
+
+// Update pass
+Data.Intercompany.ActualizarEmpleados("hogar");
+// ... all 9 branches
+```
+
+</Accordion>
+
+---
+
+## Execution order summary
+
+<CardGroup cols={2}>
+  <Card title="Hub → Branch (1:9)" icon="arrow-right">
+    Fabricante, GrupoArt, GrupoSN, condicionespago, CrearGrupoDescuento, Crearvendedores, Actualizarvendedores, CrearEmpleados, ActualizarEmpleados
+  </Card>
+  <Card title="Peer-to-Peer (9×8)" icon="arrows-split-up-and-left">
+    CreararticuloTODASV2, ActualizararticuloTODASV2, CrearSOCIOTODAS, ActualizaSOCIOTODAS
+  </Card>
+</CardGroup>

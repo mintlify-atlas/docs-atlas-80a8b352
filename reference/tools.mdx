@@ -1,0 +1,337 @@
+---
+title: "Utility Classes: Logging, INI, Memory, and Files"
+sidebarTitle: "Tools"
+description: "Reference for the supporting utility classes in the Inter_Hechiz.tools and Inter_Hechiz.Tools namespaces: RegistroLog, IniFile, LiberaMemoria, gestorarchivos, OcultarConsola, and ConexionDiapi."
+---
+
+The synchronization engine relies on a small set of utility classes that handle cross-cutting concerns: structured logging, INI-file configuration reading, OS-level memory management, file copying, console window visibility, and SAP DI-API connectivity. These classes are intentionally lightweight — none of them carry domain logic — and several of them use Windows P/Invoke (`kernel32.dll`, `user32.dll`) since the application targets .NET Framework 4.8 on a Windows Server host.
+
+---
+
+## RegistroLog
+
+**Namespace:** `Inter_Hechiz.tools`  
+**File:** `Tools/RegistroLog.cs`
+
+`RegistroLog` is an instantiated (non-static) logging class. A single instance is created near the top of most `Intercompany` methods (`static RegistroLog objRegistraLog = new RegistroLog()`) and used throughout that method's lifetime. All three write methods append text to files; they never truncate or overwrite.
+
+```csharp
+public class RegistroLog
+{
+    public void Graba(string strLog)
+    public void GrabaJson(string strLog)
+    public int GrabaProc(string strLog)
+}
+```
+
+---
+
+### `Graba`
+
+```csharp
+public void Graba(string strLog)
+```
+
+Appends `strLog` followed by a newline to a date-stamped text file in the `Log/` subdirectory next to the executable. The file is named `Log_YYYYMMDD.txt` based on the current date, so a new file is started automatically at midnight without any scheduler intervention. The `Log/` directory is created if it does not exist.
+
+**Log path pattern:**
+```
+<exe-dir>/Log/Log_20260618.txt
+```
+
+On write failure, a fallback entry is appended to `C:\Temp\log_fatal.txt`.
+
+---
+
+### `GrabaJson`
+
+```csharp
+public void GrabaJson(string strLog)
+```
+
+Identical to `Graba` in behavior but writes to a separate file named `LogJson_YYYYMMDD.txt`. This file is used to log raw JSON payloads for debugging Service Layer requests and responses, keeping them separate from the operational log.
+
+**Log path pattern:**
+```
+<exe-dir>/Log/LogJson_20260618.txt
+```
+
+---
+
+### `GrabaProc`
+
+```csharp
+public int GrabaProc(string strLog)
+```
+
+Writes `strLog` to a non-rotating file `LogProcesos/LogProc.txt`, relative to the current working directory. Unlike `Graba` and `GrabaJson`, this file is not date-stamped and grows indefinitely. It is a legacy method retained for compatibility; active code primarily uses `Graba`. Always returns `0`.
+
+<Warning>
+  `GrabaProc` uses `Directory.GetCurrentDirectory()` rather than the executable's base directory. If the application is launched from a different working directory (e.g. via Task Scheduler), the `LogProcesos` folder will be created in an unexpected location.
+</Warning>
+
+---
+
+## IniFile
+
+**Namespace:** `Inter_Hechiz.tools`  
+**File:** `Tools/IniFile.cs`
+
+`IniFile` wraps the Windows `kernel32.dll` `GetPrivateProfileString` and `WritePrivateProfileString` functions via P/Invoke to provide INI-file read/write operations. It is the sole mechanism by which the application reads its configuration — every class that needs a setting constructs an `IniFile` instance pointing to `config.ini` in the executable directory.
+
+```csharp
+public class IniFile
+{
+    public string ficheroINI { get; private set; }  // Path to the .ini file
+
+    public IniFile(string INIPath)
+    public string LeerINI(string Seccion, string Clave)
+    public void EscribirINI(string Seccion, string Clave, string Valor)
+}
+```
+
+---
+
+### Constructor
+
+```csharp
+public IniFile(string INIPath)
+```
+
+Stores `INIPath` as `ficheroINI`. No file I/O occurs at construction time; the path is simply held for use in subsequent read/write calls.
+
+---
+
+### `LeerINI`
+
+```csharp
+public string LeerINI(string Seccion, string Clave)
+```
+
+Returns the value of `Clave` within `[Seccion]` in the INI file. If the section or key does not exist, returns an empty string. Internally uses a 255-character `StringBuilder` buffer, so values longer than 254 characters will be silently truncated.
+
+<ParamField path="Seccion" type="string" required>
+  The INI section name, without brackets (e.g. `"ConexionHanaProd"`).
+</ParamField>
+
+<ParamField path="Clave" type="string" required>
+  The key name within the section (e.g. `"SERVERNODE"`).
+</ParamField>
+
+**Usage pattern throughout the codebase:**
+
+```csharp
+IniFile IniFil = new IniFile(
+    Path.GetDirectoryName(
+        System.Reflection.Assembly.GetExecutingAssembly().Location)
+    + "/config.ini");
+
+string server  = IniFil.LeerINI("ConexionHanaProd", "SERVERNODE");
+string urlSL   = IniFil.LeerINI("ServiceLayer", "UrlSL");
+```
+
+---
+
+### `EscribirINI`
+
+```csharp
+public void EscribirINI(string Seccion, string Clave, string Valor)
+```
+
+Writes `Valor` to `[Seccion] > Clave` in the INI file. Creates the key if it does not exist. This method is defined but is not called in any active code path — the application is read-only with respect to `config.ini` at runtime.
+
+<ParamField path="Seccion" type="string" required>
+  Target section name.
+</ParamField>
+
+<ParamField path="Clave" type="string" required>
+  Target key name.
+</ParamField>
+
+<ParamField path="Valor" type="string" required>
+  Value to write.
+</ParamField>
+
+---
+
+## LiberaMemoria
+
+**Namespace:** `Inter_Hechiz`  
+**File:** `Tools/LiberaMemoria.cs`
+
+`LiberaMemoria` is a static utility class that releases .NET managed memory and trims the process working set after large synchronization operations. It is called at the end of the legacy `SINCROERROR` method and can be invoked anywhere a significant memory release is desired.
+
+```csharp
+public static class LiberaMemoria
+{
+    public static void FlushMemory()
+}
+```
+
+### `FlushMemory`
+
+```csharp
+public static void FlushMemory()
+```
+
+Performs a two-stage memory release:
+
+1. Calls `GC.Collect()` and `GC.WaitForPendingFinalizers()` to trigger an immediate garbage collection and wait for all finalizers to complete.
+2. On Windows (`PlatformID.Win32NT`), calls `SetProcessWorkingSetSize(handle, -1, -1)` via `kernel32.dll` P/Invoke to instruct the OS to trim the process working set, returning physical RAM pages to the OS pool.
+
+```csharp
+public static void FlushMemory()
+{
+    GC.Collect();
+    GC.WaitForPendingFinalizers();
+    if (Environment.OSVersion.Platform == PlatformID.Win32NT)
+    {
+        SetProcessWorkingSetSize(
+            System.Diagnostics.Process.GetCurrentProcess().Handle, -1, -1);
+    }
+}
+```
+
+<Note>
+  Passing `-1` for both the minimum and maximum working set size is the documented Windows technique for emptying the working set. The process will re-acquire physical pages as it continues executing; this is a soft release, not a termination.
+</Note>
+
+---
+
+## gestorarchivos
+
+**Namespace:** `Inter_Hechiz.Tools`  
+**File:** `Tools/gestorarchivos.cs`
+
+`gestorarchivos` is a static file-management helper that copies a named file from a source directory to a destination directory, creating the destination if it does not exist. It exposes a `paso` status flag that callers can inspect to determine whether the copy succeeded.
+
+```csharp
+public static class gestorarchivos
+{
+    public static int paso = 0;
+
+    public static void MoverArchivo(
+        string nombreArchivo,
+        string rutaOrigen,
+        string rutaDestino,
+        string ext)
+}
+```
+
+### `MoverArchivo`
+
+```csharp
+public static void MoverArchivo(
+    string nombreArchivo,  // File name without extension
+    string rutaOrigen,     // Source directory path
+    string rutaDestino,    // Destination directory path (created if missing)
+    string ext             // File extension without leading dot
+)
+```
+
+Copies the file `<rutaOrigen>/<nombreArchivo>.<ext>` to `<rutaDestino>/<nombreArchivo>.<ext>`. The destination directory is created if it does not exist. If the destination file already exists it is overwritten. Sets `paso = 1` on success; `paso` remains `0` if the source directory or file does not exist, or if an exception occurs.
+
+<ParamField path="nombreArchivo" type="string" required>
+  File name without extension (e.g. `"attachment_123"`).
+</ParamField>
+
+<ParamField path="rutaOrigen" type="string" required>
+  Full path to the source directory (e.g. `@"C:\Attachments\Pending"`).
+</ParamField>
+
+<ParamField path="rutaDestino" type="string" required>
+  Full path to the destination directory. Created automatically if it does not exist.
+</ParamField>
+
+<ParamField path="ext" type="string" required>
+  File extension without a leading dot (e.g. `"pdf"`, `"xml"`).
+</ParamField>
+
+**Checking the result:**
+
+```csharp
+gestorarchivos.MoverArchivo("doc_456", @"C:\Inbox", @"C:\Archive", "pdf");
+if (gestorarchivos.paso == 1)
+{
+    // File was copied successfully
+}
+```
+
+<Warning>
+  `paso` is a static field. In a multi-threaded context (or if `MoverArchivo` is called multiple times in sequence) you must read `paso` immediately after each call before the next call resets it to `0`.
+</Warning>
+
+---
+
+## OcultarConsola
+
+**Namespace:** `Inter_Hechiz.tools`  
+**File:** `Tools/OcultarConsola.cs`
+
+`OcultarConsola` is an internal static class that hides the console window at application startup. Because the application runs as a scheduled task, leaving the console window visible would create a distracting UI flash each time the task fires. Hiding the window keeps execution invisible to interactive desktop sessions.
+
+```csharp
+internal static class OcultarConsola
+{
+    public static void DisappearConsole()
+}
+```
+
+### `DisappearConsole`
+
+```csharp
+public static void DisappearConsole()
+```
+
+Retrieves the handle of the current console window via `GetConsoleWindow()` (kernel32.dll) and then calls `ShowWindow(handle, 0)` (user32.dll `SW_HIDE`) to hide it. The window handle is obtained at call time; the call is a no-op if there is no associated console window.
+
+```csharp
+// First line of Program.Main:
+OcultarConsola.DisappearConsole();
+```
+
+<Note>
+  `DisappearConsole` hides the window but does not detach the process from its console session. Standard output and error streams remain open. Log output goes to files via `RegistroLog`, not to the console.
+</Note>
+
+---
+
+## ConexionDiapi
+
+**Namespace:** `MCH_IC.Tools`  
+**File:** `Tools/ConexionDiapi.cs`
+
+`ConexionDiapi` establishes a direct SAP Business One DI-API (COM SDK) connection for operations that are not available through the REST Service Layer — specifically, attachment creation. An instance is created, `Open()` is called, and the resulting `myCompany` object is used for DI-API calls.
+
+```csharp
+public class ConexionDiapi
+{
+    public Company myCompany;  // SAPbobsCOM.Company object after successful Open()
+
+    public bool Open()
+}
+```
+
+### `Open`
+
+```csharp
+public bool Open()
+```
+
+Reads `[ConexionSap]` credentials from `config.ini` (`Server`, `UserName`, `Password`, `DbUserName`, `DbPassword`), configures a `SAPbobsCOM.Company` object for HANA (`dst_HANADB`), and calls `myCompany.Connect()`. The target company database is read from the static field `Diapiattachment.bdpublica` (set externally before calling `Open`).
+
+Returns `true` if `Connect()` returns error code `0`; returns `false` and logs the SAP error description otherwise. On exception, logs the exception message and returns `false`.
+
+<Accordion title="config.ini keys read by ConexionDiapi.Open">
+  | Key | Section | Description |
+  |-----|---------|-------------|
+  | `Server` | `ConexionSap` | SAP HANA server address and port |
+  | `UserName` | `ConexionSap` | SAP Business One username |
+  | `Password` | `ConexionSap` | SAP Business One password |
+  | `DbUserName` | `ConexionSap` | HANA database user (currently commented out) |
+  | `DbPassword` | `ConexionSap` | HANA database password (currently commented out) |
+</Accordion>
+
+<Warning>
+  `ConexionDiapi` is referenced only from `Diapiattachment.cs`, and the calls to `Diapiattachment.CrearAttach` in `Program.Main` are currently commented out. Do not instantiate `ConexionDiapi` without first ensuring the DI-API license server is reachable and the `[ConexionSap]` section of `config.ini` is fully configured.
+</Warning>

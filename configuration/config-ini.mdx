@@ -1,0 +1,171 @@
+---
+title: "config.ini Reference: All Configuration Keys Explained"
+sidebarTitle: "config.ini"
+description: "Complete reference for every key in config.ini — the single configuration file that controls HANA connectivity, company databases, Service Layer credentials, and scheduler settings."
+---
+
+The entire runtime behaviour of **MCH\_IC.exe** is driven by a single plain-text INI file named `config.ini`. The file must be placed in the same directory as the executable — i.e., the build output folder (e.g. `MCH_IC/bin/x64/Debug/` during development, or the deployment folder in production). Every key is read at process startup through the `IniFile` class, which delegates directly to the Windows `kernel32.dll` `GetPrivateProfileString` API, so the file must exist and be accessible before the first sync cycle begins.
+
+<Warning>
+`config.ini` stores SAP Business One Service Layer credentials and SAP HANA database system credentials **in plaintext**. Restrict read access to this file using Windows NTFS permissions so that only the service account running MCH\_IC.exe can read it. Do not commit the file to source control.
+</Warning>
+
+<Note>
+Two config files ship in the output folder. `config.ini` targets the **production** HANA company databases (e.g. `10071_HECHIZO_DEP`). `config2.ini` targets the **test** environment — it is identical in structure but every database name carries a `_TEST` suffix (e.g. `10071_HECHIZO_DEP_TEST`). To run MCH\_IC.exe against the test environment, rename or swap `config2.ini` to `config.ini` before launching the process.
+</Note>
+
+---
+
+## How the file is loaded
+
+`IniFile` wraps two P/Invoke declarations from `kernel32.dll`:
+
+```csharp
+[DllImport("kernel32")]
+private static extern int GetPrivateProfileString(
+    string section, string key, string def,
+    StringBuilder retVal, int size, string filePath);
+```
+
+The `LeerINI(section, key)` helper method calls `GetPrivateProfileString` with a 255-character buffer and returns the trimmed string value. All reads happen through `Conexion.cs` static field initializers at class-load time, meaning any missing or malformed key will produce an empty string (or throw an `ArgumentNullException` for the mandatory `UserSL`/`PassSL` credential keys).
+
+The path to the file is always resolved relative to the executing assembly:
+
+```csharp
+new IniFile(
+    Path.GetDirectoryName(
+        System.Reflection.Assembly.GetExecutingAssembly().Location
+    ) + "/config.ini"
+);
+```
+
+---
+
+## Section reference
+
+### `[ServiceLayer]`
+
+Defines the base URL for the SAP Business One Service Layer REST API. This section also duplicates the HANA system user/password for legacy reasons — the primary Service Layer credential keys live in `[ConexionHanaProd]`.
+
+| Key | Type | Description |
+|-----|------|-------------|
+| `UrlSL` | URL | Full base URL of the Service Layer, including the trailing slash. All REST calls are built by appending resource paths to this value (e.g. `Manufacturers`, `ItemGroups`). |
+
+<Accordion title="Legacy keys in [ServiceLayer] (not used by Conexion.cs)">
+The `[ServiceLayer]` section in the shipping `config.ini` also contains `UID`, `PWD`, and `DATABASENAME` keys. These are **not** read by `Conexion.cs` or any other class in the current codebase. They appear to be remnants of an earlier configuration layout and can be safely ignored, but removing them is not required.
+</Accordion>
+
+---
+
+### `[ConexionHanaProd]`
+
+This is the primary section. It provides both the Service Layer authentication credentials and the ODBC connection parameters for direct HANA SQL queries, plus the logical name-to-database mapping for every company.
+
+#### Service Layer credentials
+
+| Key | Description |
+|-----|-------------|
+| `UserSL` | SAP Business One application user name used to authenticate against the Service Layer for every company. This value is embedded in the Base64 JSON token (see `Authentication`). |
+| `PassSL` | Password for `UserSL`. Appended after a colon to the serialised JSON credential before Base64 encoding. Throwing `ArgumentNullException` if absent. |
+
+#### ODBC / HANA direct connection
+
+These keys are assembled at startup into the `Conexion.strCon` connection string used by all `OdbcConnection` queries.
+
+| Key | Description | Example value |
+|-----|-------------|---------------|
+| `DSN` | ODBC driver specification. Must match the driver name registered in ODBC Data Sources. | `{HDBODBC}` |
+| `SERVERNODE` | SAP HANA server hostname and SQL port. | `hana-007:30015` |
+| `UID` | SAP HANA database system user. This account needs SELECT access on all company schemas listed below. | `SYSTEM` |
+| `PWD` | Password for the HANA `UID` system user. | *(your HANA password)* |
+| `DATABASENAME` | HANA multi-tenant instance/catalog name. Currently commented out in `conexionhana()` but kept for reference. | `NDB` |
+
+The assembled connection string takes this form:
+
+```bash
+DRIVER={HDBODBC}; SERVERNODE=hana-007:30015; UID=SYSTEM; PWD=<your_password>
+```
+
+#### Company database names
+
+Each key maps a logical short name (used throughout the C# codebase) to the actual SAP HANA schema/database name.
+
+| Key | Role | Description |
+|-----|------|-------------|
+| `ORIGEN` | Hub (Hechizo) | The master source-of-truth company. Master data is replicated **from** this database to all branches. |
+| `sur` | Branch | Deportes Sur company database. |
+| `omdo` | Branch | OMDO company database. |
+| `nedn` | Branch | NEDN company database. |
+| `hogar` | Branch | Hogar Ideal company database. |
+| `flores` | Branch | Flores Deportes company database. |
+| `vital` | Branch | Encanto Vital company database. |
+| `emde` | Branch | EMDE company database. |
+| `central` | Branch | Ave Central company database. |
+| `desampa` | Branch | Company database identified by fiscal code `3_102_956112`. |
+
+---
+
+### `[CodSocio]`
+
+Maps each company's logical key to the SAP Business One **Business Partner CardCode** that represents that company inside Hechizo's own database. These codes are used by intercompany transaction sync methods (e.g. `ConsultarCardCode()`) to identify the counterpart when creating purchase orders and vendor invoices.
+
+| Key | CardCode in Hechizo | Description |
+|-----|---------------------|-------------|
+| `ORIGEN` | `PL00001` | Hechizo's own vendor/supplier code (used when Hechizo is the destination). |
+| `sur` | `2703` | Hechizo's BP code for Deportes Sur. |
+| `omdo` | `2704` | Hechizo's BP code for OMDO. |
+| `nedn` | `2706` | Hechizo's BP code for NEDN. |
+| `hogar` | `2776` | Hechizo's BP code for Hogar Ideal. |
+| `flores` | `2731` | Hechizo's BP code for Flores Deportes. |
+| `vital` | `2775` | Hechizo's BP code for Encanto Vital. |
+| `emde` | `2705` | Hechizo's BP code for EMDE. |
+| `central` | `2738` | Hechizo's BP code for Ave Central. |
+| `desampa` | `CL00041` | Hechizo's BP code for the Desamparados company. |
+
+---
+
+## Annotated file template
+
+The block below shows the exact structure of `config.ini` with real credentials replaced by descriptive placeholders. Use this as a deployment checklist.
+
+```ini
+[ServiceLayer]
+UrlSL=https://<hana-hostname>:<service-layer-port>/b1s/v1/
+
+[ConexionHanaProd]
+; --- Service Layer authentication ---
+UserSL=<sap-b1-username>
+PassSL=<sap-b1-password>
+
+; --- HANA ODBC direct connection ---
+DSN={HDBODBC}
+SERVERNODE=<hana-hostname>:<hana-sql-port>
+UID=<hana-system-user>
+PWD=<hana-system-password>
+DATABASENAME=<hana-catalog-name>
+
+; --- Company database schema names ---
+ORIGEN=<hub-company-db-name>
+sur=<sur-company-db-name>
+omdo=<omdo-company-db-name>
+nedn=<nedn-company-db-name>
+hogar=<hogar-company-db-name>
+flores=<flores-company-db-name>
+vital=<vital-company-db-name>
+emde=<emde-company-db-name>
+central=<central-company-db-name>
+desampa=<desampa-company-db-name>
+
+[CodSocio]
+; --- Business partner CardCodes as seen from Hechizo ---
+ORIGEN=<hechizo-own-bp-code>
+sur=<sur-bp-code-in-hechizo>
+omdo=<omdo-bp-code-in-hechizo>
+nedn=<nedn-bp-code-in-hechizo>
+hogar=<hogar-bp-code-in-hechizo>
+flores=<flores-bp-code-in-hechizo>
+vital=<vital-bp-code-in-hechizo>
+emde=<emde-bp-code-in-hechizo>
+central=<central-bp-code-in-hechizo>
+desampa=<desampa-bp-code-in-hechizo>
+```

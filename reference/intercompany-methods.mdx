@@ -1,0 +1,573 @@
+---
+title: "Intercompany Class: Full Method Reference"
+sidebarTitle: "Intercompany Methods"
+description: "Complete reference for every public static method in the Inter_Hechiz.Data.Intercompany class — the core synchronization engine of the application."
+---
+
+The `Intercompany` class lives in the `Inter_Hechiz.Data` namespace and is the single engine that drives all data replication across the nine SAP Business One company databases. Every method is `public static`, meaning no instance is ever constructed — callers invoke methods directly through the class name, as seen throughout `Program.Main()`. The class reads its Service Layer base URL from `[ServiceLayer] UrlSL` in `config.ini` on every call, so the URL can be changed without recompilation. All network traffic passes through the internal `EnviaSapPorBasicAuth` helper, which handles HTTP request construction, SSL bypass, and response deserialization.
+
+---
+
+## Master Data Methods
+
+These methods keep reference data consistent across all branches. Each one queries the Hechizo (origin) database for records that do not yet exist in the destination company and posts them through the SAP Business One Service Layer REST API.
+
+---
+
+### `Fabricante`
+
+```csharp
+public static void Fabricante(string bdDestino, string Tokendestino)
+```
+
+Replicates manufacturer records from the Hechizo master database to a single branch database. The method queries `OMRC` (Manufacturers) in the Hechizo HANA schema, then for each manufacturer that is absent from the destination schema it calls `POST /Manufacturers` via the Service Layer.
+
+<ParamField path="bdDestino" type="string" required>
+  The SAP HANA schema name of the destination company (e.g. `Conexion.BD_sur`). Resolved to the physical database name via the internal `ConsultarBD` helper.
+</ParamField>
+
+<ParamField path="Tokendestino" type="string" required>
+  The `Basic <base64>` authorization token for the destination Service Layer session (e.g. `Conexion.token_sur`).
+</ParamField>
+
+---
+
+### `GrupoArt`
+
+```csharp
+public static void GrupoArt(string bdDestino, string TokenDestino)
+```
+
+Replicates item groups from Hechizo to a branch. Queries `OITB` (Item Groups) in the source schema and posts any missing entries to `POST /ItemGroups` on the destination Service Layer.
+
+<ParamField path="bdDestino" type="string" required>
+  Destination company schema name.
+</ParamField>
+
+<ParamField path="TokenDestino" type="string" required>
+  Basic Auth token for the destination Service Layer.
+</ParamField>
+
+---
+
+### `GrupoSN`
+
+```csharp
+public static void GrupoSN(string bdDestino, string TokenDestino)
+```
+
+Replicates business partner groups from Hechizo to a branch. Queries `OCRG` (BP Groups) and posts missing groups to `POST /BusinessPartnerGroups`.
+
+<ParamField path="bdDestino" type="string" required>
+  Destination company schema name.
+</ParamField>
+
+<ParamField path="TokenDestino" type="string" required>
+  Basic Auth token for the destination Service Layer.
+</ParamField>
+
+---
+
+### `condicionespago`
+
+```csharp
+public static void condicionespago(string bdDestino, string TokenDestino)
+```
+
+Replicates payment terms from Hechizo to a branch. Queries `OCTG` (Payment Terms) and posts missing records to `POST /PaymentTermsTypes`.
+
+<ParamField path="bdDestino" type="string" required>
+  Destination company schema name.
+</ParamField>
+
+<ParamField path="TokenDestino" type="string" required>
+  Basic Auth token for the destination Service Layer.
+</ParamField>
+
+---
+
+### `CreararticuloTODASV2`
+
+```csharp
+public static Respuesta CreararticuloTODASV2(string bdDestino)
+```
+
+Creates item master records that exist in the named source company but are missing from all other branch companies. The method resolves the source schema from the `bdDestino` key string, queries `OITM` joined with pricing and group data, then for each missing item posts `POST /Items` via `EnviaSapPorSesion` (session-cookie authentication). This is the V2 replacement for the deprecated `CreararticuloTODAS`.
+
+<ParamField path="bdDestino" type="string" required>
+  Company key string identifying the **source** company (e.g. `"hogar"`, `"sur"`, `"omdo"`). Internally resolved to a HANA schema name via `ConsultarBD`.
+</ParamField>
+
+**Returns** `Respuesta` — `Codigo = 0` on success; negative on error.
+
+<Note>
+  `CreararticuloTODASV2` uses session-cookie authentication (`EnviaSapPorSesion`) rather than Basic Auth. A valid session cookie must already be established via `conecta_service_layer` before calling this method.
+</Note>
+
+---
+
+### `ActualizararticuloTODASV2`
+
+```csharp
+public static Respuesta ActualizararticuloTODASV2(string bdDestino)
+```
+
+Updates item master records in all branch companies from the named source company. For each item that already exists in a destination schema and has changed in the source, it calls `PATCH /Items('{ItemCode}')`.
+
+<ParamField path="bdDestino" type="string" required>
+  Company key string identifying the source company.
+</ParamField>
+
+**Returns** `Respuesta`.
+
+---
+
+### `CrearSOCIOTODAS`
+
+```csharp
+public static Respuesta CrearSOCIOTODAS(string bdOrigen, string bdDestino, string TokenDestino)
+```
+
+Creates business partners present in the origin company that do not yet exist in the destination company. Queries `OCRD` (Business Partners) from `bdOrigen` and posts each missing record to `POST /BusinessPartners` using Basic Auth.
+
+<ParamField path="bdOrigen" type="string" required>
+  Company key string for the source (e.g. `"hogar"`).
+</ParamField>
+
+<ParamField path="bdDestino" type="string" required>
+  Company key string for the destination.
+</ParamField>
+
+<ParamField path="TokenDestino" type="string" required>
+  Basic Auth token for the destination Service Layer.
+</ParamField>
+
+**Returns** `Respuesta`.
+
+---
+
+### `ActualizaSOCIOTODAS`
+
+```csharp
+public static Respuesta ActualizaSOCIOTODAS(string bdOrigen, string bdDestino, string TokenDestino)
+```
+
+Updates existing business partner records in the destination company from the origin. For each BP flagged for update in the source, calls `PATCH /BusinessPartners('{CardCode}')`.
+
+<ParamField path="bdOrigen" type="string" required>
+  Company key string for the source.
+</ParamField>
+
+<ParamField path="bdDestino" type="string" required>
+  Company key string for the destination.
+</ParamField>
+
+<ParamField path="TokenDestino" type="string" required>
+  Basic Auth token for the destination Service Layer.
+</ParamField>
+
+**Returns** `Respuesta`.
+
+---
+
+### `CrearGrupoDescuento`
+
+```csharp
+public static Respuesta CrearGrupoDescuento(string bdDestino, string TokenDetino)
+```
+
+Creates discount groups in the destination branch that exist in Hechizo but are absent from the branch. Uses `GET` to check existence before `POST /SpecialPrices` on the Service Layer.
+
+<ParamField path="bdDestino" type="string" required>
+  Destination company schema name.
+</ParamField>
+
+<ParamField path="TokenDetino" type="string" required>
+  Basic Auth token for the destination Service Layer. (Note: parameter name contains a typo in source — `TokenDetino`.)
+</ParamField>
+
+**Returns** `Respuesta`.
+
+---
+
+### `Crearvendedores`
+
+```csharp
+public static Respuesta Crearvendedores(string bdDestino)
+```
+
+Creates salesperson records in the destination branch that are present in Hechizo but missing from the branch. Posts to `POST /SalesPersons` via session-cookie authentication.
+
+<ParamField path="bdDestino" type="string" required>
+  Company key string for the destination.
+</ParamField>
+
+**Returns** `Respuesta`.
+
+---
+
+### `Actualizarvendedores`
+
+```csharp
+public static Respuesta Actualizarvendedores(string bdDestino)
+```
+
+Updates existing salesperson records in the destination branch from Hechizo. Calls `PATCH /SalesPersons({SalesEmployeeCode})`.
+
+<ParamField path="bdDestino" type="string" required>
+  Company key string for the destination.
+</ParamField>
+
+**Returns** `Respuesta`.
+
+---
+
+### `CrearEmpleados`
+
+```csharp
+public static Respuesta CrearEmpleados(string bdDestino)
+```
+
+Creates employee records in the destination branch from Hechizo. Posts to `POST /EmployeesInfo`.
+
+<ParamField path="bdDestino" type="string" required>
+  Company key string for the destination.
+</ParamField>
+
+**Returns** `Respuesta`.
+
+---
+
+### `ActualizarEmpleados`
+
+```csharp
+public static Respuesta ActualizarEmpleados(string bdDestino)
+```
+
+Updates existing employee records in the destination branch from Hechizo. Calls `PATCH /EmployeesInfo({EmployeeID})`.
+
+<ParamField path="bdDestino" type="string" required>
+  Company key string for the destination.
+</ParamField>
+
+**Returns** `Respuesta`.
+
+---
+
+## Document Flow Methods
+
+These methods implement the intercompany purchase-to-pay cycle: purchase requests flow from branches to Hechizo, become sales orders in Hechizo, and return to branches as purchase orders. Invoices and credit notes mirror in the same direction.
+
+---
+
+### `ProcesarSolictComp`
+
+```csharp
+public static void ProcesarSolictComp(string bdOrigen, string tokenDestino)
+```
+
+Reads open purchase requests (`OPRQ`) from a branch database and creates corresponding purchase requests in the Hechizo company via `POST /PurchaseRequests`. This is the first step of the intercompany replenishment workflow.
+
+<ParamField path="bdOrigen" type="string" required>
+  Company key string for the branch originating the purchase request.
+</ParamField>
+
+<ParamField path="tokenDestino" type="string" required>
+  Basic Auth token for the **Hechizo** Service Layer (the destination in this direction).
+</ParamField>
+
+---
+
+### `ProcesarEnOrdVentaHechizo`
+
+```csharp
+public static void ProcesarEnOrdVentaHechizo(string tokenDestino)
+```
+
+Converts open purchase requests in Hechizo (created by `ProcesarSolictComp`) into sales orders by posting to `POST /Orders`. After a successful order is created the originating purchase request is closed via `POST /PurchaseRequests({DocEntry})/Close`.
+
+<ParamField path="tokenDestino" type="string" required>
+  Basic Auth token for the Hechizo Service Layer.
+</ParamField>
+
+---
+
+### `ProcesarEnOrdCompra`
+
+```csharp
+public static void ProcesarEnOrdCompra(string bdDestino, string tokenDestino)
+```
+
+Creates purchase orders in a branch company that correspond to open Hechizo sales orders. Queries Hechizo `ORDR` for unprocessed orders referencing the branch CardCode, then posts each to `POST /PurchaseOrders` on the branch Service Layer.
+
+<ParamField path="bdDestino" type="string" required>
+  Company key string for the destination branch.
+</ParamField>
+
+<ParamField path="tokenDestino" type="string" required>
+  Basic Auth token for the destination branch Service Layer.
+</ParamField>
+
+---
+
+### `ActualizarEnOrdCompra`
+
+```csharp
+public static void ActualizarEnOrdCompra(string bdDestino, string tokenDestino)
+```
+
+Applies updates from Hechizo sales orders (flagged with `U_Actualiza = 'Y'`) to existing branch purchase orders via `PATCH /PurchaseOrders({DocEntry})`.
+
+<ParamField path="bdDestino" type="string" required>
+  Company key string for the destination branch.
+</ParamField>
+
+<ParamField path="tokenDestino" type="string" required>
+  Basic Auth token for the destination branch Service Layer.
+</ParamField>
+
+---
+
+### `ProcesarFacturaProveEnSucursales`
+
+```csharp
+public static void ProcesarFacturaProveEnSucursales(string bdDestino, string tokenDestino)
+```
+
+Creates AP invoices (`PurchaseInvoices`) in a branch company derived from open AR invoices (`OINV`) in Hechizo that reference the branch's CardCode. Posts to `POST /PurchaseInvoices`.
+
+<ParamField path="bdDestino" type="string" required>
+  Company key string for the destination branch.
+</ParamField>
+
+<ParamField path="tokenDestino" type="string" required>
+  Basic Auth token for the destination branch Service Layer.
+</ParamField>
+
+---
+
+### `ProcesarNotasCredProveEnSucursales`
+
+```csharp
+public static void ProcesarNotasCredProveEnSucursales(string bdDestino, string tokenDestino)
+```
+
+Creates AP credit notes (`PurchaseCreditNotes`) in a branch company from Hechizo AR credit notes (`ORIN`) that reference the branch's CardCode. Posts to `POST /PurchaseCreditNotes`.
+
+<ParamField path="bdDestino" type="string" required>
+  Company key string for the destination branch.
+</ParamField>
+
+<ParamField path="tokenDestino" type="string" required>
+  Basic Auth token for the destination branch Service Layer.
+</ParamField>
+
+---
+
+### `ProcesarNotasCredProveEnSucursalesV1`
+
+```csharp
+public static void ProcesarNotasCredProveEnSucursalesV1(string bdDestino, string tokenDestino)
+```
+
+Legacy variant of the AP credit note creation flow, retained for the `omdo` branch which requires a different document query. Functionally equivalent to `ProcesarNotasCredProveEnSucursales` but uses an alternative SQL query against `ORIN`.
+
+<ParamField path="bdDestino" type="string" required>
+  Company key string for the destination branch (typically `"omdo"` for this variant).
+</ParamField>
+
+<ParamField path="tokenDestino" type="string" required>
+  Basic Auth token for the destination branch Service Layer.
+</ParamField>
+
+<Warning>
+  Use `ProcesarNotasCredProveEnSucursales` for all branches except where the V1 variant is explicitly required. Mixing them will result in duplicate credit note creation.
+</Warning>
+
+---
+
+### `ActualizarEnFacturaProvee`
+
+```csharp
+public static void ActualizarEnFacturaProvee(string bdDestino, string tokenDestino)
+```
+
+Applies header-level updates from Hechizo AR invoices (flagged `U_Actualiza = 'Y'`) to the corresponding branch AP invoices via `PATCH /PurchaseInvoices({DocEntry})`. The `B1S-ReplaceCollectionsOnPatch` header is **not** sent for this method (`Usar = "N"` passed to `EnviaSapPorBasicAuth`), preserving existing document lines.
+
+<ParamField path="bdDestino" type="string" required>
+  Company key string for the destination branch.
+</ParamField>
+
+<ParamField path="tokenDestino" type="string" required>
+  Basic Auth token for the destination branch Service Layer.
+</ParamField>
+
+---
+
+### `ActualizarEnNotaCredProvee`
+
+```csharp
+public static void ActualizarEnNotaCredProvee(string bdDestino, string tokenDestino)
+```
+
+Applies header-level updates from Hechizo AR credit notes (flagged `U_Actualiza = 'Y'`) to the corresponding branch AP credit notes via `PATCH /PurchaseCreditNotes({DocEntry})`. Like `ActualizarEnFacturaProvee`, this method passes `Usar = "N"` to suppress collection replacement on patch.
+
+<ParamField path="bdDestino" type="string" required>
+  Company key string for the destination branch.
+</ParamField>
+
+<ParamField path="tokenDestino" type="string" required>
+  Basic Auth token for the destination branch Service Layer.
+</ParamField>
+
+---
+
+### `ProcesarCuentasdesdeHechizoV2`
+
+```csharp
+public static void ProcesarCuentasdesdeHechizoV2(
+    string bdDestino,
+    string tokenDestino,
+    ProcesoCuenta proceso)
+```
+
+Creates or updates G/L chart-of-accounts entries in a branch from the Hechizo master chart. The `proceso` parameter selects the operation: `ProcesoCuenta.Crear` calls `POST /ChartOfAccounts`; `ProcesoCuenta.Actualizar` calls `PATCH /ChartOfAccounts('{AcctCode}')`.
+
+<ParamField path="bdDestino" type="string" required>
+  Company key string for the destination branch.
+</ParamField>
+
+<ParamField path="tokenDestino" type="string" required>
+  Basic Auth token for the destination branch Service Layer.
+</ParamField>
+
+<ParamField path="proceso" type="ProcesoCuenta" required>
+  Controls the operation. `ProcesoCuenta.Crear` to create new accounts; `ProcesoCuenta.Actualizar` to update existing ones.
+</ParamField>
+
+---
+
+### `ProcesarEnPagoRecibido`
+
+```csharp
+public static void ProcesarEnPagoRecibido(string bdOrigen, string bdDestino, string tokenDestino)
+```
+
+Mirrors incoming payment (`ORCT`) records from an origin branch to a destination company via `POST /IncomingPayments`. This enables cash receipt visibility across entities.
+
+<ParamField path="bdOrigen" type="string" required>
+  Company key string for the branch where the payment was received.
+</ParamField>
+
+<ParamField path="bdDestino" type="string" required>
+  Company key string for the destination company.
+</ParamField>
+
+<ParamField path="tokenDestino" type="string" required>
+  Basic Auth token for the destination Service Layer.
+</ParamField>
+
+---
+
+## Infrastructure Methods
+
+These methods support the synchronization framework itself rather than individual document or master data flows.
+
+---
+
+### `SINCROERROR_V2`
+
+```csharp
+public static void SINCROERROR_V2()
+```
+
+Clears the `@SINCROERROR` user-defined table in the Hechizo database by calling the stored procedure `SP_LIMPIA_SINCROERROR`. This method is invoked once at the very start of `Program.Main()` to reset the error registry before each synchronization run.
+
+<Note>
+  `SINCROERROR_V2` supersedes the earlier `SINCROERROR` method, which issued a direct `TRUNCATE TABLE` only when the current time was before 07:00. The V2 version delegates all cleanup logic to the stored procedure and runs unconditionally.
+</Note>
+
+---
+
+### `EnviaSapPorBasicAuth`
+
+```csharp
+public static int EnviaSapPorBasicAuth(
+    string Metodo,
+    JObject JsonObject,
+    string URL,
+    string toctoc,
+    string Usar = "Y")
+```
+
+Central HTTP dispatch helper used by all document-flow and most master-data methods. Constructs an `HttpWebRequest`, attaches the `Authorization` header, serializes the JSON body (if any), sends the request, and deserializes the response.
+
+<ParamField path="Metodo" type="string" required>
+  HTTP verb: `"GET"`, `"POST"`, or `"PATCH"`.
+</ParamField>
+
+<ParamField path="JsonObject" type="JObject" required>
+  The request body. Pass `null` for GET requests.
+</ParamField>
+
+<ParamField path="URL" type="string" required>
+  Full Service Layer endpoint URL (e.g. `UrlServiceLayer + "PurchaseOrders"`).
+</ParamField>
+
+<ParamField path="toctoc" type="string" required>
+  The `Basic <base64>` authorization token appended to the `Authorization` header.
+</ParamField>
+
+<ParamField path="Usar" type="string">
+  When `"Y"` (default) and `Metodo` is `"PATCH"`, the request header `B1S-ReplaceCollectionsOnPatch: true` is added, causing the Service Layer to replace child collections (lines, addresses, etc.) entirely. Set to `"N"` to perform a partial header-only patch and preserve document lines.
+</ParamField>
+
+**Return values:**
+
+<ResponseField name="0" type="int">
+  Success. The response body has been deserialized into the static `Marketing` object (`ObjSap`), which exposes the new document's `DocEntry` and `DocNum`.
+</ResponseField>
+
+<ResponseField name="-1" type="int">
+  Exception. An unhandled .NET exception occurred (e.g. network timeout, DNS failure). The error message is stored in the private static field `RR`.
+</ResponseField>
+
+<ResponseField name="-2" type="int">
+  Service Layer error. The API returned an error response body. The `error.message.value` string from the JSON error envelope is stored in `RR`.
+</ResponseField>
+
+<Tip>
+  After a call that returns `-2`, read the human-readable SAP error by inspecting the log file written by `RegistroLog.Graba` — the calling method always appends `RR` to the log before continuing.
+</Tip>
+
+---
+
+## Enums
+
+### `ProcesoCuenta`
+
+```csharp
+public enum ProcesoCuenta
+{
+    Crear,
+    Actualizar
+}
+```
+
+Defined inside the `Intercompany` class. Controls the behavior of `ProcesarCuentasdesdeHechizoV2` — whether it creates new G/L accounts in the destination (`Crear`) or updates existing ones (`Actualizar`).
+
+---
+
+## Return Type
+
+Most methods that return a value use the `Respuesta` class, defined at the bottom of `Intercompany.cs`:
+
+```csharp
+public class Respuesta
+{
+    public int Codigo { get; set; }    // 0 = success, negative = error
+    public string Mensaje { get; set; } // Human-readable message or error detail
+}
+```
+
+Methods that return `void` (such as `Fabricante`, `GrupoArt`, `ProcesarSolictComp`, and the document flow methods) write results directly to the log via `RegistroLog.Graba` and update the `@SINCROERROR` UDT table on failure through the private `Inserterror` helper.

@@ -1,0 +1,74 @@
+---
+title: "Hechizo SAP Intercompany: Multi-Company SAP B1 Sync"
+sidebarTitle: "Introduction"
+description: "Learn how Hechizo SAP Intercompany automates bidirectional data replication across nine SAP Business One company databases using the Service Layer API."
+---
+
+Hechizo SAP Intercompany is a .NET Framework 4.8 console application (`MCH_IC.exe`) that eliminates the manual overhead of keeping ten SAP Business One company databases in sync. Designed to run as a scheduled Windows process, it connects to all ten companies simultaneously through the SAP Business One Service Layer REST API, then executes a deterministic sequence of create and update operations — propagating master data from the central Hechizo company outward to nine branch companies, and funneling commercial documents (purchase requests, sales orders, invoices, credit notes, and payments) back through Hechizo and across the entire group.
+
+## What It Does
+
+The application serves as the backbone of the Grupo Hechizo intercompany process. Every execution cycle covers two broad synchronization layers:
+
+- **Master data propagation** — item manufacturers, item groups, business partner groups, payment terms, discount groups, salespeople, employees, and GL chart-of-accounts entries are written from Hechizo to all nine branches so that every company shares a consistent catalog.
+- **Commercial document lifecycle** — purchase requests created at branches become sales orders in Hechizo, which in turn generate purchase orders in the originating branch. AR invoices issued by Hechizo are mirrored as AP invoices in each branch. Credit notes and incoming payments are similarly replicated across the full company graph.
+
+Any record that cannot be synchronized is written to the SAP custom table `@SINCROERROR`, giving operators a persistent, queryable error registry inside SAP Business One itself.
+
+## The Ten Companies
+
+The synchronization network consists of one hub and nine branch databases, all residing on the same SAP HANA server:
+
+| Key | SAP Database Name | Role |
+|-----|-------------------|------|
+| `ORIGEN` | `10071_HECHIZO_DEP` | Hub / origin company |
+| `sur` | `10071_DEPORTES_SUR` | Branch |
+| `omdo` | `10071_OMDO` | Branch |
+| `nedn` | `10071_NEDN` | Branch |
+| `hogar` | `10071_HOGAR_IDEAL` | Branch |
+| `flores` | `10071_FLORES_DEP` | Branch |
+| `vital` | `10071_ENC_VITAL` | Branch |
+| `emde` | `10071_EMDE` | Branch |
+| `central` | `10071_AVECENTRAL` | Branch |
+| `desampa` | `10071_3_102_956112` | Branch |
+
+## Sync Coverage
+
+<CardGroup cols={2}>
+  <Card title="Master Data Sync" icon="database" href="/sync/master-data">
+    Manufacturers, item groups, business partner groups, payment terms, discount groups, salespeople, and employees are pushed from Hechizo to every branch on each run.
+  </Card>
+  <Card title="Purchase–Sales Cycle" icon="arrows-rotate" href="/sync/purchase-sales-cycle">
+    Branch purchase requests are promoted to Hechizo sales orders, then converted to branch purchase orders — with subsequent updates replicated bidirectionally.
+  </Card>
+  <Card title="Invoices & Payments" icon="file-invoice-dollar" href="/sync/invoices-payments">
+    AR invoices and credit notes issued in Hechizo are mirrored as AP documents in each branch. Incoming payments are replicated across every company pair.
+  </Card>
+  <Card title="Chart of Accounts" icon="list-tree" href="/sync/chart-of-accounts">
+    GL account records are created and updated in all nine branches from the Hechizo master chart of accounts using `ProcesarCuentasdesdeHechizoV2`.
+  </Card>
+</CardGroup>
+
+## Key Features
+
+- **Incremental create + update** — each entity type runs a creation pass followed by an update pass, so new records are added and existing records are kept current in a single execution.
+- **Full business partner mesh** — business partners are synced in every direction across all ten companies (not just hub-to-spoke), ensuring that intercompany receivables and payables resolve correctly.
+- **Structured error registry** — failures are logged both to a daily flat-file log (`Log/Log_YYYYMMDD.txt`) and to the `@SINCROERROR` custom table in SAP, enabling operators to query sync errors directly from SAP Business One.
+- **Silent execution** — `OcultarConsola.DisappearConsole()` hides the console window at startup, making the process suitable for unattended scheduled execution via Windows Task Scheduler.
+- **Stateless, restartable** — because every sync method checks the current state in SAP before acting, re-running the executable after a partial failure is safe; already-created records are skipped or updated rather than duplicated.
+
+## Tech Stack
+
+| Component | Detail |
+|-----------|--------|
+| Language / Runtime | C#, .NET Framework 4.8 |
+| API integration | SAP Business One Service Layer REST API (Basic Auth) |
+| Database driver | SAP HANA ODBC (`HDBODBC`) via `System.Data.Odbc` |
+| JSON serialization | Newtonsoft.Json 13.0.3 (`net45` build) |
+| SAP SDK reference | `SAPBusinessOneSDK.dll` (x64) |
+| Configuration | INI file (`config.ini`) read with a custom `IniFile` helper |
+| Error persistence | SAP custom table `@SINCROERROR` |
+
+<Note>
+  The Service Layer token is not a session cookie — it is a static Basic Auth string constructed from a JSON-encoded `{UserName, CompanyDB}` credential object and the SAP user password. One token is generated per company at startup by `Conexion.CrearToken()` and reused for the entire run.
+</Note>

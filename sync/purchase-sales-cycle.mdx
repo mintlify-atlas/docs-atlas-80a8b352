@@ -1,0 +1,138 @@
+---
+title: "Intercompany Purchase-to-Sales Order Document Flow"
+sidebarTitle: "Purchase & Sales Cycle"
+description: "Understand how branch purchase requests become Hechizo sales orders and are then converted back to purchase orders in each branch company."
+---
+
+The purchase-to-sales order cycle is the core intercompany procurement workflow in Hechizo SAP Intercompany. When a branch company needs inventory from the central Hechizo warehouse, the operator raises a purchase request in their own SAP B1 company. The sync application then carries that request through a multi-step transformation: it lands in Hechizo as a purchase request, is converted internally into a Hechizo sales order, and finally materializes as a purchase order back in the originating branch. Any subsequent changes to the Hechizo sales order are also propagated back to the branch purchase order, keeping both sides of the transaction in sync. All document relationships are tracked through custom UDF fields so each document can unambiguously trace its origin across company boundaries.
+
+<Tip>
+  Every JSON payload sent to the SAP B1 Service Layer is recorded in a daily log file (`LogJson_YYYYMMDD.txt`) located in the application's `Log/` directory. This log captures the full document body — header and all lines — and is the primary audit trail for troubleshooting failed sync operations. The log entry includes the source `BDOrigen`, the origin `DocEntry` and `DocNum`, the destination `BDDestino`, and the `DocEntry` assigned in the destination company.
+</Tip>
+
+## Document flow
+
+<Steps>
+  <Step title="Branch creates a purchase request (SolicitudCompra)">
+    An operator in a branch company (e.g., `hogar`) creates a purchase request in SAP B1 with `ReqType = 171`. The request must have the custom UDF `U_Estado = 'N'` (unprocessed) and a `DocStatus = 'O'` (open). The `Requester` field must link to a valid employee record in `OHEM`.
+
+    No application code runs at this step — it is a manual SAP B1 action.
+  </Step>
+
+  <Step title="Branch purchase requests → Hechizo purchase requests">
+    ```csharp
+    public static void ProcesarSolictComp(string bdOrigen, string tokenDestino)
+    ```
+
+    The sync reads all open, unprocessed purchase requests from each branch (querying `OPRQ` and joining `OHEM` for the requester code) and posts them to Hechizo's `PurchaseRequests` Service Layer endpoint using `Conexion.token_hechizo`. On success, the branch record is flagged with `U_Estado = 'Y'` and the assigned Hechizo `DocNum`/`DocEntry` are written back into `U_DocNumDestino`/`U_DocEntryDestino`. On failure the error message is stored in `U_ComentarioError`.
+
+    ```csharp
+    Data.Intercompany.ProcesarSolictComp("hogar",    Conexion.token_hechizo);
+    Data.Intercompany.ProcesarSolictComp("sur",      Conexion.token_hechizo);
+    Data.Intercompany.ProcesarSolictComp("omdo",     Conexion.token_hechizo);
+    Data.Intercompany.ProcesarSolictComp("nedn",     Conexion.token_hechizo);
+    Data.Intercompany.ProcesarSolictComp("flores",   Conexion.token_hechizo);
+    Data.Intercompany.ProcesarSolictComp("vital",    Conexion.token_hechizo);
+    Data.Intercompany.ProcesarSolictComp("emde",     Conexion.token_hechizo);
+    Data.Intercompany.ProcesarSolictComp("central",  Conexion.token_hechizo);
+    Data.Intercompany.ProcesarSolictComp("desampa",  Conexion.token_hechizo);
+    ```
+
+    The `U_OrigenIntercompany` UDF on the created Hechizo purchase request is set to the full HANA database name of the originating branch (e.g., `10071_3_102_956112`), establishing the cross-company link.
+  </Step>
+
+  <Step title="Hechizo purchase requests → Hechizo sales orders (OrdVenta)">
+    ```csharp
+    public static void ProcesarEnOrdVentaHechizo(string tokenDestino)
+    ```
+
+    This step is entirely internal to Hechizo — no branch company is involved. The method queries Hechizo's own `OPRQ` table for purchase requests that have `U_ConvertirOV = 'Y'` (flagged for conversion), are open and not cancelled, have a non-null `U_OrigenIntercompany`, and have `U_Estado = 'N'`. For each qualifying request, it:
+
+    1. Determines the correct `CardCode` for the destination branch by calling `ConsultarCardCode` with the origin database name.
+    2. Posts the document to Hechizo's `Orders` endpoint, creating a sales order.
+    3. Updates the Hechizo `OPRQ` record with `U_Estado = 'Y'` and the new sales order's `DocEntry`/`DocNum`.
+    4. Closes the originating purchase request via a `PurchaseRequests({DocEntry})/Close` call so it no longer appears in open document queries.
+
+    ```csharp
+    // Called once — internal Hechizo conversion
+    Data.Intercompany.ProcesarEnOrdVentaHechizo(Conexion.token_hechizo);
+    ```
+  </Step>
+
+  <Step title="Hechizo sales orders → Branch purchase orders (OrdCompra)">
+    ```csharp
+    public static void ProcesarEnOrdCompra(string bdDestino, string tokenDestino)
+    ```
+
+    For each branch, the method queries Hechizo's `ORDR` (sales orders) table for open, unprocessed orders (`U_Estado = 'N'`) whose `U_OrigenIntercompany` matches the branch's full database name, or whose `CardCode` matches the branch's intercompany partner code. It then:
+
+    1. Resolves the corresponding branch purchase request `DocEntry` from the Hechizo solicitud chain.
+    2. Builds a purchase order JSON object from the Hechizo sales order header and line items.
+    3. Sets `U_DocEntryOrigen` and `U_DocNumOrigen` on the new purchase order to the Hechizo sales order values.
+    4. When the sales order originated from a branch solicitud, document lines carry a `BaseType` / `BaseEntry` reference back to the branch purchase request (`BaseType = 1470000113`).
+    5. Posts to the branch's `PurchaseOrders` Service Layer endpoint.
+    6. Stamps the Hechizo `ORDR` record with `U_Estado = 'Y'` and the branch's new `DocEntry`/`DocNum`.
+
+    ```csharp
+    Data.Intercompany.ProcesarEnOrdCompra("hogar",   Conexion.token_hogarn);
+    Data.Intercompany.ProcesarEnOrdCompra("sur",     Conexion.token_sur);
+    Data.Intercompany.ProcesarEnOrdCompra("omdo",    Conexion.token_omdo);
+    Data.Intercompany.ProcesarEnOrdCompra("nedn",    Conexion.token_nedn);
+    Data.Intercompany.ProcesarEnOrdCompra("flores",  Conexion.token_flores);
+    Data.Intercompany.ProcesarEnOrdCompra("vital",   Conexion.token_vital);
+    Data.Intercompany.ProcesarEnOrdCompra("emde",    Conexion.token_emde);
+    Data.Intercompany.ProcesarEnOrdCompra("central", Conexion.token_central);
+    Data.Intercompany.ProcesarEnOrdCompra("desampa", Conexion.token_desampa);
+    ```
+  </Step>
+
+  <Step title="Replicate Hechizo sales order updates → Branch purchase orders">
+    ```csharp
+    public static void ActualizarEnOrdCompra(string bdDestino, string tokenDestino)
+    ```
+
+    After the initial creation pass, operators may modify open Hechizo sales orders (e.g., changing quantities, prices, or due dates). `ActualizarEnOrdCompra` picks up those changes and patches the corresponding branch purchase orders using a Service Layer PATCH request, keying on `U_DocEntryOrigen` to locate the correct destination document.
+
+    ```csharp
+    Data.Intercompany.ActualizarEnOrdCompra("hogar",   Conexion.token_hogarn);
+    Data.Intercompany.ActualizarEnOrdCompra("sur",     Conexion.token_sur);
+    Data.Intercompany.ActualizarEnOrdCompra("omdo",    Conexion.token_omdo);
+    Data.Intercompany.ActualizarEnOrdCompra("nedn",    Conexion.token_nedn);
+    Data.Intercompany.ActualizarEnOrdCompra("flores",  Conexion.token_flores);
+    Data.Intercompany.ActualizarEnOrdCompra("vital",   Conexion.token_vital);
+    Data.Intercompany.ActualizarEnOrdCompra("emde",    Conexion.token_emde);
+    Data.Intercompany.ActualizarEnOrdCompra("central", Conexion.token_central);
+    Data.Intercompany.ActualizarEnOrdCompra("desampa", Conexion.token_desampa);
+    ```
+  </Step>
+</Steps>
+
+---
+
+## Document tracking UDFs
+
+Cross-company document linking relies on custom User-Defined Fields that must be present in every participating SAP B1 company. The table below lists the key UDFs used throughout the purchase-sales cycle.
+
+| UDF | Table | Purpose |
+|---|---|---|
+| `U_Estado` | `OPRQ`, `ORDR`, `OPOR` | Processing state flag: `'N'` = pending, `'Y'` = processed |
+| `U_DocEntryOrigen` | `ORDR`, `OPOR` | `DocEntry` of the source document in the origin company |
+| `U_DocNumOrigen` | `ORDR`, `OPOR` | Human-readable `DocNum` of the source document |
+| `U_DocEntryDestino` | `OPRQ`, `ORDR` | `DocEntry` assigned to the created document in the destination |
+| `U_DocNumDestino` | `OPRQ`, `ORDR` | `DocNum` assigned in the destination company |
+| `U_OrigenIntercompany` | `OPRQ`, `ORDR`, `OPOR` | Full HANA database name of the originating company |
+| `U_ConvertirOV` | `OPRQ` (Hechizo) | Flag set by a user or rule to trigger conversion to a sales order |
+| `U_ComentarioError` | `OPRQ`, `ORDR` | Service Layer error message stored on failed attempts |
+
+---
+
+## V2 test variant
+
+The source contains a `ProcesarEnOrdCompraV2` method and a corresponding `ActualizarEnOrdCompraV2`. These are identical in logic to their V1 counterparts except that `ProcesarEnOrdCompraV2` additionally calls `ComparePricesAndLog` after a successful insert, logging any price discrepancies between the Hechizo sales order and the branch price list. Both variants are currently commented out in `Program.cs` and are marked as `TEST`:
+
+```csharp
+//Data.Intercompany.ProcesarEnOrdCompraV2("desampa", Conexion.token_desampa); TEST
+// Data.Intercompany.ActualizarEnOrdCompraV2("desampa", Conexion.token_desampa); TEST
+```
+
+Do not enable these in production without validating the price comparison output in a staging environment first.

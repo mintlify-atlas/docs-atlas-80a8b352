@@ -1,47 +1,140 @@
 ---
-title: "Quickstart"
-description: "Begin with a guide on the fastest path to a successful outcome"
+title: "Get Started with Hechizo SAP Intercompany"
+sidebarTitle: "Quickstart"
+description: "Build, configure, and run the Hechizo SAP Intercompany sync application against your SAP Business One environment in four steps."
 ---
 
-Describe how someone begins using your product. What is the first thing they need to do? Are there any prerequisites?
-
-A quickstart should take someone from zero to using your product. They'll get a quick win and a sense of what they can accomplish.
-
-## Prerequisites
-
-Before you begin, you must have:
-
-- Requirement one (for example, Node.js 18+, a free account, an API key)
-- Requirement two (for example, a compatible device, a compatible browser, a compatible operating system)
-
-## Get started
+Getting the synchronization engine running requires satisfying a small set of infrastructure prerequisites, building the project for the correct platform target, and dropping a single configuration file next to the executable. The four steps below take you from a fresh clone to a working scheduled sync.
 
 <Steps>
-  <Step title="Install">
-    Describe how to install your product or sign up.
+  <Step title="Prerequisites">
+    Verify that every dependency is in place on the machine that will run the sync before you attempt a build or execution.
 
-    ```bash
-    npm install your-package
-    ```
+    **Runtime and build tools**
+    - [.NET Framework 4.8 Developer Pack](https://dotnet.microsoft.com/en-us/download/dotnet-framework/net48) (SDK + targeting pack) installed on the build machine
+    - Visual Studio 2019 or later (Community edition is sufficient) with the **.NET desktop development** workload
+    - x64 operating system — the project targets `x64` due to the `SAPBusinessOneSDK.dll` dependency
+
+    **SAP HANA connectivity**
+    - SAP HANA ODBC driver (`HDBODBC`) installed and registered in the Windows ODBC Data Source Administrator. The `DSN` value in `config.ini` must reference this driver using the syntax `{HDBODBC}`.
+    - Network access to the SAP HANA server on port **30015** (HANA SQL / ODBC)
+
+    **SAP Business One Service Layer**
+    - SAP Business One Service Layer accessible at `https://your-hana-server:50000/b1s/v1/`
+    - A dedicated SAP B1 user (e.g. `Hechizo06`) with permissions to read and write items, business partners, orders, invoices, payments, and GL accounts across all ten company databases
+    - Network access to the Service Layer HTTPS port (**50000** by default) from the machine running `MCH_IC.exe`
+
+    <Warning>
+      The `SAPBusinessOneSDK.dll` referenced in the `.csproj` is resolved from an absolute path (`C:\Users\consult07\source\repos\proyectoprueba\SAPBusinessOneSDK.dll`). Before building on a new machine you must update the `HintPath` in `MCH_IC/Inter_Hechiz.csproj` to point to the copy of the DLL on your local file system.
+    </Warning>
   </Step>
-  <Step title="Configure">
-    Describe any setup or configuration needed before first use.
+
+  <Step title="Clone and Build">
+    Clone the repository and open the solution in Visual Studio. The project **must** be compiled for the `x64` platform — the `SAPBusinessOneSDK.dll` is a 64-bit assembly and the build will fail or produce a non-functional binary under `AnyCPU` or `x86`.
 
     ```bash
-    your-cli init
+    git clone https://github.com/FCS-Consultores/hechizo-SAP-intercompany.git
+    cd hechizo-SAP-intercompany
+    # Open Inter_Hechiz.sln in Visual Studio and build x64|Debug or x64|Release
     ```
+
+    In Visual Studio:
+    1. Open `Inter_Hechiz.sln`.
+    2. In the toolbar platform dropdown, select **x64** (not `Any CPU`).
+    3. Choose **Debug** or **Release** from the configuration dropdown.
+    4. Press **Ctrl+Shift+B** (Build Solution).
+
+    The compiled output lands in:
+    - Debug: `MCH_IC/bin/x64/Debug/MCH_IC.exe`
+    - Release: `MCH_IC/bin/x64/Release/MCH_IC.exe`
   </Step>
-  <Step title="Run it">
-    Show the first thing a user does to see it working.
+
+  <Step title="Configure config.ini">
+    `config.ini` is **not** embedded in the binary — the application reads it from the same directory as `MCH_IC.exe` at startup using `Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location)`. Copy the file to your output directory (`bin/x64/Debug/` or `bin/x64/Release/`) and fill in the `[ConexionHanaProd]` section with your environment's values.
+
+    ```ini
+    [ServiceLayer]
+    UrlSL=https://your-hana-server:50000/b1s/v1/
+    UID=SYSTEM
+    PWD=YOUR_SYSTEM_PASSWORD
+    DATABASENAME=NDB
+
+    [ConexionHanaProd]
+    UserSL=Hechizo06
+    PassSL=YOUR_SERVICE_LAYER_PASSWORD
+    DSN={HDBODBC}
+    SERVERNODE=your-hana-server:30015
+    UID=SYSTEM
+    PWD=YOUR_HANA_ODBC_PASSWORD
+    DATABASENAME=NDB
+    ORIGEN=10071_HECHIZO_DEP
+    sur=10071_DEPORTES_SUR
+    omdo=10071_OMDO
+    nedn=10071_NEDN
+    hogar=10071_HOGAR_IDEAL
+    flores=10071_FLORES_DEP
+    vital=10071_ENC_VITAL
+    emde=10071_EMDE
+    central=10071_AVECENTRAL
+    desampa=10071_3_102_956112
+
+    [CodSocio]
+    ORIGEN=PL00001
+    sur=2703
+    omdo=2704
+    nedn=2706
+    hogar=2776
+    flores=2731
+    vital=2775
+    emde=2705
+    central=2738
+    desampa=CL00041
+    ```
+
+    **Key fields reference**
+
+    | Field | Used by | Description |
+    |-------|---------|-------------|
+    | `UserSL` | `Conexion.CrearToken()` | SAP B1 username embedded in every Basic Auth token |
+    | `PassSL` | `Conexion.CrearToken()` | SAP B1 user password — combined with `UserSL` and `CompanyDB` to produce each company's token |
+    | `DSN` | `Conexion.conexionhana()` | ODBC driver name; must match the installed HANA ODBC driver string |
+    | `SERVERNODE` | `Conexion.conexionhana()` | HANA host and SQL port, e.g. `hana-007:30015` |
+    | `ORIGEN` | `Conexion.Consultar_Hechizo()` | SAP database name for the hub (Hechizo) company |
+    | `sur` … `desampa` | `Conexion.Consultar_*()` | SAP database names for each of the nine branch companies |
+    | `[CodSocio]` | Runtime lookups | Internal business partner codes used when creating intercompany partner records |
+
+    <Info>
+      The `[ServiceLayer]` section is present in the file but the application derives the Service Layer base URL from the `SERVERNODE` value rather than `UrlSL` at runtime. Keep the section for reference but ensure `SERVERNODE` reflects your actual HANA hostname.
+    </Info>
+  </Step>
+
+  <Step title="Run the Sync">
+    Execute `MCH_IC.exe` directly or invoke it from a script. The console window disappears immediately — this is intentional (`OcultarConsola.DisappearConsole()` is called as the very first statement in `Main()`). The process runs to completion in the background and then exits.
 
     ```bash
-    your-cli start
+    # Run from the output directory
+    cd MCH_IC\bin\x64\Debug
+    MCH_IC.exe
     ```
+
+    **Monitoring progress**
+
+    All activity is written to a daily rolling log file in the `Log/` subdirectory next to the executable:
+
+    ```
+    MCH_IC/bin/x64/Debug/Log/Log_20260113.txt
+    ```
+
+    Each entry is timestamped in `HH:mm:ss tt` format. Successful operations produce confirmation lines (e.g. `Cliente Creado : CL00009/ Hora: 11:28:31 AM`). Errors include the full exception message and the operation context (e.g. `Error en Orden Compra, ERROR [IM002] ...`).
+
+    A full sync cycle touches hundreds of API calls across all ten companies. Execution time depends on the volume of unsynced records and Service Layer response latency — plan for several minutes per run in a production environment.
   </Step>
 </Steps>
 
-<Tip>
-  Give people a way to get help. This could be a link to a support page, a chat with a customer support agent, or a forum for your product.
+<Note>
+  Errors that cannot be resolved mid-run are persisted to the custom SAP table `@SINCROERROR` via `Data.Intercompany.SINCROERROR_V2()`, which is the first method called in `Main()`. This means you can query `SELECT * FROM "@SINCROERROR"` directly in SAP HANA Studio or from within SAP Business One's user-defined table viewer to see any records that failed to sync during the last execution.
+</Note>
 
-  Example: Need help? Reach out to us at [support@yourcompany.com](mailto:support@yourcompany.com).
+<Tip>
+  Use **Windows Task Scheduler** to run `MCH_IC.exe` on a recurring schedule (hourly or nightly is typical for intercompany sync workloads). Create a basic task, set the action to `Start a program`, point it at the full path of `MCH_IC.exe`, and set the **Start in** field to the directory containing `config.ini` and the `Log/` folder. Because the console hides itself, the task runs silently with no visible window.
 </Tip>

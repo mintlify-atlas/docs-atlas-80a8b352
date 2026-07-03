@@ -1,0 +1,119 @@
+{
+  "projectType": "general",
+  "projectName": "Hechizo SAP Intercompany",
+  "projectDescription": "A .NET Framework console application that automates intercompany data synchronization across nine SAP Business One company databases via the Service Layer API, replicating master data and commercial documents in real time.",
+  "theme": "aspen",
+  "primaryColor": "#1B5E9B",
+  "lightColor": "#E8F1FA",
+  "darkColor": "#0D3A6B",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "architecture"
+            ]
+          },
+          {
+            "group": "Configuration",
+            "pages": [
+              "configuration/config-ini",
+              "configuration/company-databases",
+              "configuration/authentication"
+            ]
+          },
+          {
+            "group": "Sync Processes",
+            "pages": [
+              "sync/master-data",
+              "sync/purchase-sales-cycle",
+              "sync/invoices-payments",
+              "sync/chart-of-accounts"
+            ]
+          },
+          {
+            "group": "Operations",
+            "pages": [
+              "operations/logging",
+              "operations/error-handling",
+              "operations/scheduling"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Reference",
+        "groups": [
+          {
+            "group": "API Reference",
+            "pages": [
+              "reference/intercompany-methods",
+              "reference/conexion-class",
+              "reference/tools"
+            ]
+          },
+          {
+            "group": "Data Models",
+            "pages": [
+              "reference/models"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Automated bidirectional synchronization of master data (items, business partners, manufacturers, payment terms, GL accounts) across 9 SAP Business One companies",
+    "Full intercompany purchase-to-sale document flow: purchase requests → sales orders (Hechizo) → purchase orders (branches)",
+    "Replication of AR invoices and AR credit notes from Hechizo as AP invoices and AP credit notes in branch companies",
+    "Incoming payment synchronization across all company pairs in both directions",
+    "Discount group, salesperson, and employee master data replication",
+    "SAP Business One Service Layer REST API integration with Basic Auth token management",
+    "INI-file-based configuration for HANA database connections and per-company credentials",
+    "File-based daily log system with structured JSON payload logging for audit trails",
+    "Error registry stored in SAP custom table @SINCROERROR for persistent failure tracking",
+    "Memory management utilities for long-running synchronization sessions"
+  ],
+  "publicApiSurface": [
+    "Intercompany.Fabricante(string bdDestino, string Tokendestino)",
+    "Intercompany.GrupoArt(string bdDestino, string TokenDestino)",
+    "Intercompany.GrupoSN(string bdDestino, string TokenDestino)",
+    "Intercompany.condicionespago(string bdDestino, string TokenDestino)",
+    "Intercompany.CreararticuloTODASV2(string bdDestino)",
+    "Intercompany.ActualizararticuloTODASV2(string bdDestino)",
+    "Intercompany.CrearSOCIOTODAS(string bdOrigen, string bdDestino, string TokenDestino)",
+    "Intercompany.ActualizaSOCIOTODAS(string bdOrigen, string bdDestino, string TokenDestino)",
+    "Intercompany.CrearGrupoDescuento(string bdDestino, string TokenDetino)",
+    "Intercompany.Crearvendedores(string bdDestino)",
+    "Intercompany.Actualizarvendedores(string bdDestino)",
+    "Intercompany.CrearEmpleados(string bdDestino)",
+    "Intercompany.ActualizarEmpleados(string bdDestino)",
+    "Intercompany.ProcesarSolictComp(string bdOrigen, string tokenDestino)",
+    "Intercompany.ProcesarEnOrdVentaHechizo(string tokenDestino)",
+    "Intercompany.ProcesarEnOrdCompra(string bdDestino, string tokenDestino)",
+    "Intercompany.ActualizarEnOrdCompra(string bdDestino, string tokenDestino)",
+    "Intercompany.ProcesarFacturaProveEnSucursales(string bdDestino, string tokenDestino)",
+    "Intercompany.ProcesarNotasCredProveEnSucursales(string bdDestino, string tokenDestino)",
+    "Intercompany.ActualizarEnFacturaProvee(string bdDestino, string tokenDestino)",
+    "Intercompany.ActualizarEnNotaCredProvee(string bdDestino, string tokenDestino)",
+    "Intercompany.ProcesarCuentasdesdeHechizoV2(string bdDestino, string tokenDestino, ProcesoCuenta proceso)",
+    "Intercompany.ProcesarEnPagoRecibido(string bdOrigen, string bdDestino, string tokenDestino)",
+    "Intercompany.SINCROERROR_V2()",
+    "Intercompany.EnviaSapPorBasicAuth(string Metodo, JObject JsonObject, string URL, string toctoc, string Usar)",
+    "Conexion.CrearToken(string _DB)",
+    "Conexion.conexionhana()",
+    "ConexionDiapi.Open()",
+    "RegistroLog.Graba(string strLog)",
+    "RegistroLog.GrabaJson(string strLog)",
+    "IniFile.LeerINI(string Seccion, string Clave)",
+    "IniFile.EscribirINI(string Seccion, string Clave, string Valor)",
+    "gestorarchivos.MoverArchivo(string nombreArchivo, string rutaOrigen, string rutaDestino, string ext)",
+    "LiberaMemoria.FlushMemory()",
+    "enum ProcesoCuenta { Crear, Actualizar }"
+  ]
+}

@@ -1,0 +1,160 @@
+---
+title: "Schedule Hechizo Intercompany with Windows Task Scheduler"
+sidebarTitle: "Scheduling"
+description: "Configure Windows Task Scheduler to run MCH_IC.exe automatically on a recurring basis and monitor execution through the Log folder."
+---
+
+`MCH_IC.exe` is a headless console application designed for unattended, recurring execution. At startup it calls `OcultarConsola.DisappearConsole()` — a P/Invoke wrapper around the Win32 `ShowWindow(HIDE)` API — so that no console window appears on the desktop when the process launches. This makes it well-suited for deployment under Windows Task Scheduler, which remains the supported mechanism for triggering sync cycles on a schedule.
+
+## How Console Hiding Works
+
+```csharp
+class OcultarConsola
+{
+    [DllImport("kernel32.dll")]
+    static extern IntPtr GetConsoleWindow();
+
+    [DllImport("user32.dll")]
+    static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+
+    const int HIDE = 0;
+    const int SHOW = 5;
+
+    public static void DisappearConsole()
+    {
+        ShowWindow(GetConsoleWindow(), HIDE);
+    }
+}
+```
+
+`DisappearConsole()` is the first statement in `Program.Main()`, called before any sync logic runs. The process continues executing in the background; only the console window is hidden. Log output goes to `Log\Log_YYYYMMDD.txt` rather than stdout.
+
+---
+
+## Setting Up Windows Task Scheduler
+
+The steps below create a repeating task that runs `MCH_IC.exe` without showing any window, using the "do not start a new instance" concurrency guard that prevents overlapping runs.
+
+<Steps>
+  <Step title="Open Task Scheduler">
+    Press **Win + R**, type `taskschd.msc`, and press Enter. Alternatively, search for **Task Scheduler** in the Start menu.
+  </Step>
+
+  <Step title="Create a new Basic Task">
+    In the **Actions** panel on the right, click **Create Task** (not "Create Basic Task") to access all settings in one dialog.
+
+    On the **General** tab:
+    - **Name:** `Hechizo SAP Intercompany Sync`
+    - **Description:** `Runs MCH_IC.exe to synchronize intercompany data across all nine SAP Business One databases.`
+    - Check **Run whether user is logged on or not**
+    - Check **Run with highest privileges** (required if UAC is active on the server)
+    - Set **Configure for:** `Windows Server 2016` or the OS version of the host
+  </Step>
+
+  <Step title="Configure the trigger">
+    On the **Triggers** tab, click **New…**:
+
+    - **Begin the task:** `On a schedule`
+    - **Settings:** `Daily`
+    - **Start:** Set a sensible start time, such as `08:00:00 AM`
+    - Check **Repeat task every:** `30 minutes` (adjust to your data volume and latency requirements)
+    - **For a duration of:** `Indefinitely`
+    - Check **Enabled**
+
+    Click **OK**.
+  </Step>
+
+  <Step title="Configure the action">
+    On the **Actions** tab, click **New…**:
+
+    - **Action:** `Start a program`
+    - **Program/script:** Browse to the full path of `MCH_IC.exe`, for example:
+      ```text
+      C:\Hechizo\MCH_IC\bin\x64\Release\MCH_IC.exe
+      ```
+    - **Start in (optional):** Enter the **same directory** as `MCH_IC.exe`, for example:
+      ```text
+      C:\Hechizo\MCH_IC\bin\x64\Release\
+      ```
+    
+    The **Start in** field is critical. `MCH_IC.exe` resolves `config.ini` and creates the `Log\` subdirectory relative to its working directory. If this field is empty or points to a different path, the application will not find its configuration file.
+
+    Click **OK**.
+  </Step>
+
+  <Step title="Set concurrency and conditions">
+    On the **Settings** tab:
+
+    - Check **If the task is already running, then the following rule applies:** → select **Do not start a new instance**
+    - Uncheck **Stop the task if it runs longer than** (a full sync cycle may take several minutes; set a generous cap only if you want a hard timeout)
+    - Check **Run task as soon as possible after a scheduled start is missed** (optional — useful if the server was rebooted during a scheduled window)
+
+    On the **Conditions** tab:
+    - Uncheck **Start the task only if the computer is on AC power** if running on a server (servers are always on AC)
+  </Step>
+
+  <Step title="Set the Run As account">
+    Back on the **General** tab, click **Change User or Group…** and select a Windows service account that has:
+
+    - **Network access** to the SAP HANA server at `hana-007.fcscr-cloud.net` on port `50000`
+    - **Read/write access** to the `MCH_IC.exe` directory (to create and append to `Log\`)
+    - The **HDBODBC** System DSN must be visible to this account (System DSNs are available to all accounts; User DSNs are not)
+
+    Click **OK**, enter the account password when prompted, and save the task.
+  </Step>
+</Steps>
+
+---
+
+## Legacy Scheduler Configuration in `config.ini`
+
+Early builds of Hechizo included an internal scheduler that read timing parameters from `config.ini`. That section is still present in the Debug configuration file:
+
+```ini
+[MyScheduler]
+HoraInicio=09
+MinutosInicio=41
+CadaXMinutos=1
+```
+
+| Key | Description |
+|---|---|
+| `HoraInicio` | Hour of the first run (24-hour clock) |
+| `MinutosInicio` | Minute offset for the first run |
+| `CadaXMinutos` | Repeat interval in minutes |
+
+This section is **not active in the current build**. The application delegates all scheduling to the OS-level Task Scheduler. The `[MyScheduler]` keys are retained for reference but are ignored at runtime. Do not rely on them for production scheduling.
+
+---
+
+## Monitoring Scheduled Runs
+
+<Tip>
+The operation log at `Log\Log_YYYYMMDD.txt` is appended in real time as each sync step completes. To monitor a running cycle, open the file in a tool that supports live tail — for example PowerShell:
+
+```powershell
+Get-Content "C:\Hechizo\MCH_IC\bin\x64\Release\Log\Log_20260113.txt" -Wait -Tail 30
+```
+
+Or use a dedicated log viewer such as **Baretail** or **mTail**. You will see one line per business partner or document processed, giving a live view of how far through the nine-company sync the application has progressed.
+</Tip>
+
+After each Task Scheduler execution you can also review the run history in Task Scheduler itself: right-click the task → **History**. The **Last Run Result** column shows `0x0` for success or an HRESULT code for a process-level failure (note that `MCH_IC.exe` exits with `0` even if individual sync steps logged errors — check the log files for application-level errors rather than relying solely on the Task Scheduler exit code).
+
+---
+
+## Run Duration and Capacity Planning
+
+<Note>
+A full sync cycle across all nine SAP Business One databases — covering manufacturers, item groups, business partner groups, payment conditions, items, business partners, sales/purchase orders, vendor invoices, credit notes, chart of accounts, and incoming payments — may take **several minutes** depending on:
+
+- The number of new or changed records in each object category
+- Network round-trip latency to the SAP HANA server at `hana-007:30015` (ODBC) and `hana-007.fcscr-cloud.net:50000` (Service Layer HTTPS)
+- HANA query performance under concurrent load
+
+Monitor the first few production runs manually and measure elapsed time before setting the repeat interval. A 30-minute interval is a reasonable starting point for environments with moderate transaction volumes.
+</Note>
+
+<Warning>
+Do **not** schedule overlapping runs. If a sync cycle is still executing when the next trigger fires and the "do not start a new instance" setting is not enabled, two parallel processes will attempt to create the same documents in the destination databases. This will produce duplicate vendor invoices, purchase orders, and credit notes that must be manually cancelled. Always configure the Task Scheduler rule to **Do not start a new instance** as described in Step 5 above.
+</Warning>

@@ -1,0 +1,138 @@
+---
+title: "Company Database Setup for Intercompany Synchronization"
+sidebarTitle: "Company Databases"
+description: "Configure the nine branch company databases and the Hechizo hub company in config.ini. Understand database naming conventions and business partner code mapping."
+---
+
+Hechizo SAP Intercompany uses a **hub-and-spoke** topology across ten SAP Business One company databases running on a single SAP HANA instance. The hub company — referred to internally as `ORIGEN` — is **Hechizo** (`10071_HECHIZO_DEP`). It serves as the single source of truth for all master data: item manufacturers, item groups, business partner groups, payment terms, and items. Each of the nine branch companies is a spoke that receives replicated data from the hub and participates in intercompany purchase-order and invoice flows. All ten companies live in the same HANA system and are addressed by their HANA schema name, which is what `config.ini` stores under `[ConexionHanaProd]`.
+
+---
+
+## Hub-and-spoke model
+
+<CardGroup cols={2}>
+  <Card title="Hub — Hechizo (ORIGEN)" icon="building">
+    The master database. Sync methods query this schema for master data and then push any missing records to each branch. Identified by `Conexion.BD_Hechizo` at runtime.
+  </Card>
+  <Card title="Branch companies (9 spokes)" icon="sitemap">
+    Each branch has its own SAP B1 company database. At startup, `Conexion.cs` reads each branch's schema name from `config.ini` and stores it in a static string field (e.g. `BD_sur`, `BD_omdo`, …).
+  </Card>
+</CardGroup>
+
+During every sync cycle, master-data methods (such as `Fabricante`, `GrupoArt`, `GrupoSN`, and `condicionespago`) follow this pattern:
+
+1. Query the hub database (cross-schema HANA SQL) for records **not yet present** in the branch.
+2. Serialize the missing records as JSON.
+3. POST each record to the branch company via the Service Layer REST API using that branch's authentication token.
+
+---
+
+## Company database reference
+
+The table below lists every company, its `config.ini` key under `[ConexionHanaProd]`, its role in the topology, and the actual HANA schema name used in production.
+
+| Config key | C# static field | Role | Production DB name |
+|------------|-----------------|------|--------------------|
+| `ORIGEN` | `Conexion.BD_Hechizo` | **Hub** | `10071_HECHIZO_DEP` |
+| `sur` | `Conexion.BD_sur` | Branch | `10071_DEPORTES_SUR` |
+| `omdo` | `Conexion.BD_omdo` | Branch | `10071_OMDO` |
+| `nedn` | `Conexion.BD_nedn` | Branch | `10071_NEDN` |
+| `hogar` | `Conexion.BD_hogar` | Branch | `10071_HOGAR_IDEAL` |
+| `flores` | `Conexion.BD_flores` | Branch | `10071_FLORES_DEP` |
+| `vital` | `Conexion.BD_vital` | Branch | `10071_ENC_VITAL` |
+| `emde` | `Conexion.BD_emde` | Branch | `10071_EMDE` |
+| `central` | `Conexion.BD_central` | Branch | `10071_AVECENTRAL` |
+| `desampa` | `Conexion.BD_desampa` | Branch | `10071_3_102_956112` |
+
+---
+
+## Business partner code mapping — `[CodSocio]`
+
+Every intercompany transaction (purchase order, vendor invoice, payment) requires both a **source** and a **destination** company. To create a purchase order in a branch, the sync method needs to know the SAP Business One `CardCode` that the branch uses to identify its counterpart supplier (Hechizo or another branch) in its own BP master.
+
+The `[CodSocio]` section stores these codes **as seen from Hechizo's perspective**: the value under each key is the `CardCode` that represents that branch (or Hechizo itself) inside the Hechizo (`ORIGEN`) company database.
+
+| Config key | CardCode in Hechizo | Business partner name |
+|------------|--------------------|-----------------------|
+| `ORIGEN` | `PL00001` | Hechizo (self, used as vendor when Hechizo is destination) |
+| `sur` | `2703` | Deportes Sur |
+| `omdo` | `2704` | OMDO |
+| `nedn` | `2706` | NEDN |
+| `hogar` | `2776` | Hogar Ideal |
+| `flores` | `2731` | Flores Deportes |
+| `vital` | `2775` | Encanto Vital |
+| `emde` | `2705` | EMDE |
+| `central` | `2738` | Ave Central |
+| `desampa` | `CL00041` | Desamparados company |
+
+At runtime, `ConsultarCardCode(bdDestino)` looks up the branch schema name in `Intercompany.cs` and returns the matching `CardCode` so that transaction headers can be populated correctly.
+
+---
+
+## How `Conexion.cs` reads database names at startup
+
+All ten database name fields are declared as `public static string` fields in the `Conexion` class. They are initialised once — at class-load time — by calling a dedicated private static method for each company. The pattern is identical for every branch; the example below shows `Consultar_sur()`:
+
+```csharp
+private static string Consultar_sur()
+{
+    RegistroLog objRegistraLog = new RegistroLog();
+    try
+    {
+        IniFile IniFil;
+        IniFil = new IniFile(
+            Path.GetDirectoryName(
+                System.Reflection.Assembly.GetExecutingAssembly().Location
+            ) + "/config.ini"
+        );
+        string amd = IniFil.LeerINI("ConexionHanaProd", "sur");
+        return amd;
+    }
+    catch (Exception ex)
+    {
+        objRegistraLog.Graba(ex + "/ " + "Hora: " + DateTime.Now.ToString("HH:mm:ss tt"));
+        return "";
+    }
+}
+```
+
+Each method opens a fresh `IniFile` handle, reads the named key from `[ConexionHanaProd]`, and returns the trimmed string. If the key is missing or the file cannot be opened, the method catches the exception, writes it to the log, and returns an empty string — causing that branch's sync operations to silently skip with HANA cross-schema queries targeting an empty schema name.
+
+The static fields are declared and initialised in declaration order:
+
+```csharp
+public static string BD_Hechizo = Consultar_Hechizo();
+public static string BD_sur     = Consultar_sur();
+public static string BD_omdo    = Consultar_omdo();
+public static string BD_nedn    = Consultar_nedn();
+public static string BD_hogar   = Consultar_hogar();
+public static string BD_flores  = Consultar_flores();
+public static string BD_vital   = Consultar_vital();
+public static string BD_emde    = Consultar_emde();
+public static string BD_central = Consultar_central();
+public static string BD_desampa = Consultar_desampa();
+```
+
+Note that `token_*` fields are also initialised in this same class before the `BD_*` fields — they internally call the `Consultar_*` methods themselves, so the database names are resolved twice on startup (once for the token, once for the field).
+
+---
+
+## ODBC connection string
+
+The `conexionhana()` method assembles a single ODBC connection string used for all direct HANA SQL queries across every company schema:
+
+```csharp
+public static string strCon = conexionhana();
+```
+
+The resulting string looks like this, using the values from `[ConexionHanaProd]`:
+
+```
+DRIVER={HDBODBC}; SERVERNODE=hana-007:30015; UID=SYSTEM; PWD=<hana-password>
+```
+
+This single connection is sufficient to query all company schemas because the HANA `SYSTEM` user has cross-schema visibility and the queries use fully-qualified table references (e.g. `"10071_HECHIZO_DEP"."OMRC"`).
+
+<Tip>
+To run against the test environment, use `config2.ini` (rename it to `config.ini` before launching). The test config uses `_TEST`-suffixed database names — for example `10071_HECHIZO_DEP_TEST`, `10071_DEPORTES_SUR_TEST`, and so on — so all sync operations write to isolated test schemas without touching production data.
+</Tip>

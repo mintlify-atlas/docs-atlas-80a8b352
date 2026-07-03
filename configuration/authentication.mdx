@@ -1,0 +1,187 @@
+---
+title: "Authenticate with SAP Business One Service Layer"
+sidebarTitle: "Authentication"
+description: "Learn how Hechizo SAP Intercompany generates Basic Auth tokens for each company and uses them in every Service Layer REST API call."
+---
+
+Every REST call to the SAP Business One Service Layer must carry a company-scoped authentication token. Hechizo SAP Intercompany uses **HTTP Basic Authentication** with a custom payload structure required by the SAP B1 Service Layer: instead of a simple `username:password` pair, the credentials are a Base64-encoded string that encodes a JSON object (containing `UserName` and `CompanyDB`) concatenated with the password, separated by a colon. A separate token is generated for each of the ten company databases at application startup, so every sync method can address its target company directly without a login round-trip.
+
+---
+
+## Token construction
+
+Tokens are built by the private static method `CrearToken(string _DB)` in `Conexion.cs`. The method reads `UserSL` and `PassSL` from `[ConexionHanaProd]` in `config.ini`, resolves the database name for the requested company, serialises the credential object as JSON, and then Base64-encodes the combination:
+
+```csharp
+var credenciales = new {
+    UserName = _user,
+    CompanyDB = _DB
+};
+
+string Creential = JsonConvert.SerializeObject(credenciales);
+
+var authToken = Convert.ToBase64String(
+    Encoding.ASCII.GetBytes($"{Creential}:{_pass}")
+);
+
+return _sToken = $"Basic {authToken}";
+```
+
+The raw string that gets Base64-encoded looks like this before encoding:
+
+```
+{"UserName":"Hechizo06","CompanyDB":"10071_DEPORTES_SUR"}:ZEL=-n0nrh=x}
+```
+
+The resulting header value is then:
+
+```
+Basic eyJVc2VyTmFtZSI6IkhlY2hpem8wNiIsIkNvbXBhbnlEQiI6IjEwMDcxX0RFUE9SVEVTX1NVUiJ9OlpFTD0tbjBucmg9eH0=
+```
+
+This value is passed verbatim as the `Authorization` HTTP header on every POST/PATCH/GET request to the Service Layer.
+
+---
+
+## Required config.ini keys
+
+Two keys in `[ConexionHanaProd]` control authentication for all ten companies:
+
+| Key | Description |
+|-----|-------------|
+| `UserSL` | The SAP Business One application user name. The same user must exist and be active in **every** company database listed in `[ConexionHanaProd]`. |
+| `PassSL` | The password for `UserSL`. Stored in plaintext; see the security note in [config.ini Reference](/configuration/config-ini). |
+
+Both keys are validated inside `CrearToken`:
+
+```csharp
+_user = IniFil.LeerINI("ConexionHanaProd", "UserSL")
+    ?? throw new ArgumentNullException("*UserSL no configurado en el archivo config*");
+
+_pass = IniFil.LeerINI("ConexionHanaProd", "PassSL")
+    ?? throw new ArgumentNullException("*PassSL no configurado en el archivo config*");
+```
+
+If either key is missing, `CrearToken` throws immediately and the static field initialiser for that token catches the exception, logs it, and stores an empty string.
+
+---
+
+## Token inventory
+
+All ten tokens are declared as `public static string` fields in `Conexion` and initialised at class-load time. The table below lists each field, the `CrearToken` argument passed (which maps to the `Consultar_*` method called internally), and the company it authenticates against.
+
+| Static field | `CrearToken` argument | Company | Production DB |
+|---|---|---|---|
+| `token_hechizo` | `"BD_Hechizo"` | Hechizo (hub) | `10071_HECHIZO_DEP` |
+| `token_sur` | `"BD_sur"` | Deportes Sur | `10071_DEPORTES_SUR` |
+| `token_omdo` | `"BD_omdo"` | OMDO | `10071_OMDO` |
+| `token_nedn` | `"BD_nedn"` | NEDN | `10071_NEDN` |
+| `token_hogarn` | `"BD_hogar"` | Hogar Ideal | `10071_HOGAR_IDEAL` |
+| `token_flores` | `"BD_flores"` | Flores Deportes | `10071_FLORES_DEP` |
+| `token_vital` | `"BD_vital"` | Encanto Vital | `10071_ENC_VITAL` |
+| `token_emde` | `"BD_emde"` | EMDE | `10071_EMDE` |
+| `token_central` | `"BD_central"` | Ave Central | `10071_AVECENTRAL` |
+| `token_desampa` | `"BD_desampa"` | Desamparados | `10071_3_102_956112` |
+
+The declarations in `Conexion.cs`:
+
+```csharp
+public static string token_hechizo = CrearToken("BD_Hechizo");
+public static string token_sur     = CrearToken("BD_sur");
+public static string token_omdo    = CrearToken("BD_omdo");
+public static string token_nedn    = CrearToken("BD_nedn");
+public static string token_hogarn  = CrearToken("BD_hogar");
+public static string token_flores  = CrearToken("BD_flores");
+public static string token_vital   = CrearToken("BD_vital");
+public static string token_emde    = CrearToken("BD_emde");
+public static string token_central = CrearToken("BD_central");
+public static string token_desampa = CrearToken("BD_desampa");
+```
+
+<Warning>
+All ten tokens are computed **once** during static class initialisation, before `Main()` executes. If a token fails to generate — for example, because `PassSL` is incorrect or the Service Layer is unreachable during startup — `CrearToken` logs the error and returns an empty string. The corresponding sync methods will then send requests with a blank `Authorization` header, receive HTTP 401 responses, and silently skip that company for the entire process lifetime. **Restart the process after fixing `config.ini`** — there is no runtime token refresh.
+</Warning>
+
+---
+
+## Passing tokens to sync methods
+
+Each sync method accepts the destination database name and its token as a paired argument. Every branch company is iterated in `Program.cs` with this pattern:
+
+```csharp
+Data.Intercompany.Fabricante(Conexion.BD_sur, Conexion.token_sur);
+Data.Intercompany.Fabricante(Conexion.BD_omdo, Conexion.token_omdo);
+Data.Intercompany.Fabricante(Conexion.BD_nedn, Conexion.token_nedn);
+Data.Intercompany.Fabricante(Conexion.BD_hogar, Conexion.token_hogarn);
+Data.Intercompany.Fabricante(Conexion.BD_flores, Conexion.token_flores);
+Data.Intercompany.Fabricante(Conexion.BD_vital, Conexion.token_vital);
+Data.Intercompany.Fabricante(Conexion.BD_emde, Conexion.token_emde);
+Data.Intercompany.Fabricante(Conexion.BD_central, Conexion.token_central);
+Data.Intercompany.Fabricante(Conexion.BD_desampa, Conexion.token_desampa);
+```
+
+Inside `Intercompany.cs`, the token is attached to the HTTP request as follows (representative pattern across all sync methods):
+
+```csharp
+public static void Fabricante(string bdDestino, string Tokendestino)
+{
+    // ...build JSON payload...
+    HttpWebRequest request = (HttpWebRequest)WebRequest.Create(url);
+    request.Method = "POST";
+    request.Headers["Authorization"] = Tokendestino;
+    request.ContentType = "application/json";
+    // ...write body and read response...
+}
+```
+
+The `bdDestino` string is used for the cross-schema HANA query (to detect missing records) while `Tokendestino` authenticates the subsequent Service Layer POST.
+
+---
+
+## SSL/TLS configuration
+
+<Steps>
+  <Step title="Protocol negotiation">
+    Before making Service Layer calls, the application configures `ServicePointManager` to allow the broadest possible TLS compatibility:
+
+    ```csharp
+    ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12;
+    ServicePointManager.Expect100Continue = true;
+    ServicePointManager.SecurityProtocol =
+        SecurityProtocolType.Tls  |
+        SecurityProtocolType.Tls11 |
+        SecurityProtocolType.Tls12 |
+        SecurityProtocolType.Ssl3;
+    ```
+  </Step>
+  <Step title="Certificate validation bypass">
+    Certificate validation is delegated to `RemoteSSLTLSCertificateValidate`, which unconditionally returns `true`:
+
+    ```csharp
+    private static bool RemoteSSLTLSCertificateValidate(
+        object sender, X509Certificate cert,
+        X509Chain chain, SslPolicyErrors ssl)
+    {
+        return true;
+    }
+    ```
+
+    This means **any** certificate presented by the Service Layer host is accepted, including self-signed and expired certificates.
+  </Step>
+</Steps>
+
+<Note>
+Because `RemoteSSLTLSCertificateValidate` accepts all certificates, the application is vulnerable to man-in-the-middle attacks if the network path to the Service Layer is not fully trusted. In production deployments, replace this callback with proper certificate validation, or ensure the Service Layer endpoint (`hana-007.fcscr-cloud.net:50000`) uses a certificate from a trusted CA and restrict the application to TLS 1.2 or higher only.
+</Note>
+
+---
+
+## ODBC connection string for direct HANA queries
+
+In addition to Service Layer REST calls, the application connects directly to SAP HANA via ODBC to run cross-schema SQL queries (to identify master-data gaps). The connection string is assembled at startup from `[ConexionHanaProd]` keys:
+
+```
+DRIVER={HDBODBC}; SERVERNODE=hana-007:30015; UID=SYSTEM; PWD=<your_hana_password>
+```
+
+This string is stored in `Conexion.strCon` and reused for every `OdbcConnection` throughout the process lifetime. The HANA `SYSTEM` user provides cross-schema read access to all company databases registered under `[ConexionHanaProd]`.

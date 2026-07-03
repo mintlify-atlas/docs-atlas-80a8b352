@@ -1,0 +1,260 @@
+---
+title: "Data Model Classes for Document Serialization"
+sidebarTitle: "Models"
+description: "C# model classes used by the Hechizo SAP Intercompany engine for deserializing SAP document lines and mapping intercompany data structures."
+---
+
+The Hechizo SAP Intercompany application uses a small set of lightweight model classes for two purposes: deserializing HTTP responses from the SAP Business One Service Layer REST API, and representing SAP document line data read from HANA via ODBC. All classes are plain C# POCOs (Plain Old CLR Objects) — no base classes, no attributes, no ORM mapping. Serialization and deserialization is performed entirely by `Newtonsoft.Json` (`JsonConvert.DeserializeObject`).
+
+---
+
+## DetallesOPORT
+
+**Namespace:** `Intercompany.models`  
+**File:** `Models/DetallesOPORT.cs`
+
+`DetallesOPORT` represents a single detail line read from a SAP Business One opportunity or order document. It is used internally to carry line-level data — quantities, prices, discount percentages, tax groups, and project codes — through the intercompany document flow methods before the data is serialized into Service Layer JSON payloads.
+
+```csharp
+public class DetallesOPORT
+{
+    public int DocEntry { get; set; }
+    public string ItemCode { get; set; }
+    public decimal Quantity { get; set; }
+    public decimal LineTotal { get; set; }
+    public decimal DiscPrcnt { get; set; }
+    public string VatGroup { get; set; }
+    public string PROYECTO { get; set; }
+    public string ItemDescription { get; set; }
+}
+```
+
+<ResponseField name="DocEntry" type="int">
+  The SAP internal document entry number of the parent document. Used to correlate lines back to their header record when building the Service Layer request body.
+</ResponseField>
+
+<ResponseField name="ItemCode" type="string">
+  The item master code identifying this line's product (e.g. `"JF-C2-AZ-10"`). Must match an existing item in the destination company before the document is posted.
+</ResponseField>
+
+<ResponseField name="Quantity" type="decimal">
+  The ordered or requested quantity for this line.
+</ResponseField>
+
+<ResponseField name="LineTotal" type="decimal">
+  The total monetary amount for this line, after discounts and before taxes.
+</ResponseField>
+
+<ResponseField name="DiscPrcnt" type="decimal">
+  The line-level discount percentage (e.g. `5.0` for 5 %). Applied when the discount is expressed as a percentage rather than a fixed amount.
+</ResponseField>
+
+<ResponseField name="VatGroup" type="string">
+  The SAP tax group code applied to this line (e.g. `"IVA13"` for 13 % VAT). Must match a valid tax group in the destination company.
+</ResponseField>
+
+<ResponseField name="PROYECTO" type="string">
+  A user-defined field (UDF) holding the project code linked to this document line. Mapped to `U_PROYECTO` in the Service Layer JSON payload.
+</ResponseField>
+
+<ResponseField name="ItemDescription" type="string">
+  The free-text item name or description to be embedded in the document line. Sourced from `OITM.ItemName` in the origin HANA schema.
+</ResponseField>
+
+---
+
+## Respuesta
+
+**Namespace:** `Inter_Hechiz.Data` (defined at the bottom of `Intercompany.cs`)
+
+`Respuesta` is the standard return type for all `Intercompany` methods that return a result. It carries a numeric status code and a human-readable message, allowing callers to branch on outcome without catching exceptions.
+
+```csharp
+public class Respuesta
+{
+    public int Codigo { get; set; }
+    public string Mensaje { get; set; }
+}
+```
+
+<ResponseField name="Codigo" type="int">
+  Numeric result code. `0` indicates success. Negative values indicate failure: `-1` for an unhandled .NET exception, `-2` for a Service Layer API error response.
+</ResponseField>
+
+<ResponseField name="Mensaje" type="string">
+  A human-readable description of the result. On error this is the exception message or the `error.message.value` string from the Service Layer error envelope. On success it may be empty or contain a summary of the operation.
+</ResponseField>
+
+**Typical pattern:**
+
+```csharp
+Respuesta resultado = Intercompany.CreararticuloTODASV2("sur");
+if (resultado.Codigo != 0)
+{
+    objRegistraLog.Graba($"Error creating items: {resultado.Mensaje}");
+}
+```
+
+---
+
+## Marketing
+
+**Namespace:** `Inter_Hechiz.Data` (defined in `Intercompany.cs`)
+
+`Marketing` is used to deserialize the success response body returned by the SAP Business One Service Layer when a document is created or updated. The Service Layer returns a JSON object containing the new document's internal entry number and display number, which are captured in this class by the `EnviaSapPorBasicAuth` helper.
+
+```csharp
+public class Marketing
+{
+    public int DocEntry { get; set; }
+    public int DocNum { get; set; }
+    public List<SapDocumentLine> DocumentLines { get; set; }
+}
+```
+
+<ResponseField name="DocEntry" type="int">
+  The SAP-assigned internal entry number (`DocEntry`) of the newly created or updated document. This value is stored in the origin database's UDF (e.g. `U_DocEntryDestino`) so that subsequent update operations can PATCH the correct record.
+</ResponseField>
+
+<ResponseField name="DocNum" type="int">
+  The user-facing document number (`DocNum`) as displayed in SAP Business One. Used in log messages to make error entries traceable by users without needing database access.
+</ResponseField>
+
+<ResponseField name="DocumentLines" type="List<SapDocumentLine>">
+  The document's line items as returned by the Service Layer. Each element is a `SapDocumentLine` with `LineNum`, `ItemCode`, and `UnitPrice`. This collection is present in the response for document-type endpoints; it is `null` for master-data endpoints.
+</ResponseField>
+
+The deserialized `Marketing` object is stored in the private static field `ObjSap` inside `Intercompany` immediately after `EnviaSapPorBasicAuth` returns `0`:
+
+```csharp
+ObjSap = JsonConvert.DeserializeObject<Marketing>(msn);
+return 0;
+```
+
+---
+
+## SapDocumentLine
+
+**Namespace:** `Inter_Hechiz.Data` (defined in `Intercompany.cs`)
+
+`SapDocumentLine` is a nested detail model used within `Marketing.DocumentLines` to capture individual line-level data from Service Layer create/update responses.
+
+```csharp
+public class SapDocumentLine
+{
+    public int LineNum { get; set; }
+    public string ItemCode { get; set; }
+    public decimal UnitPrice { get; set; }
+}
+```
+
+<ResponseField name="LineNum" type="int">
+  The zero-based line number within the document.
+</ResponseField>
+
+<ResponseField name="ItemCode" type="string">
+  The item code on this document line.
+</ResponseField>
+
+<ResponseField name="UnitPrice" type="decimal">
+  The unit price recorded on this line in the SAP document.
+</ResponseField>
+
+---
+
+## Root / Error / Message
+
+**Namespace:** `Inter_Hechiz.Data` (defined in `Intercompany.cs`)
+
+These three classes form the error response envelope returned by the SAP Business One Service Layer when a request fails. `EnviaSapPorBasicAuth` deserializes the error body into a `Root` object and extracts the human-readable message.
+
+```csharp
+public class Root
+{
+    public Error error { get; set; }
+}
+
+public class Error
+{
+    public int code { get; set; }
+    public Message message { get; set; }
+}
+
+public class Message
+{
+    public string lang { get; set; }
+    public string value { get; set; }
+}
+```
+
+<ResponseField name="Root.error" type="Error">
+  The top-level error object in the Service Layer error JSON envelope.
+</ResponseField>
+
+<ResponseField name="Error.code" type="int">
+  The SAP-specific numeric error code (e.g. `305` for "Record already exists").
+</ResponseField>
+
+<ResponseField name="Error.message" type="Message">
+  The localized error message object.
+</ResponseField>
+
+<ResponseField name="Message.lang" type="string">
+  The language code of the error message (e.g. `"en"` or `"es"`), set by the Service Layer based on the company language settings.
+</ResponseField>
+
+<ResponseField name="Message.value" type="string">
+  The human-readable error text. This value is stored in the private static field `RR` inside `Intercompany` and written to the log file.
+</ResponseField>
+
+**Example Service Layer error response:**
+
+```json
+{
+  "error": {
+    "code": 305,
+    "message": {
+      "lang": "en",
+      "value": "Item code 'JF-C2-AZ-10' already exists."
+    }
+  }
+}
+```
+
+---
+
+## bases
+
+**Namespace:** `Intercompany.Models`  
+**File:** `Models/basestest.cs`
+
+`bases` is an internal reference class that hard-codes HANA schema name constants. It was used during development and testing to avoid relying on `config.ini` when running against known environments.
+
+```csharp
+namespace Intercompany.Models
+{
+    class bases
+    {
+        public static string aceros = "20043_ACEROS_PESADOS";
+        string amd      = "20043_AMD_MUNDIALES";
+        string boquete  = "20043_BOQUETE";
+        string calypso  = "20043_CALYPSO";
+        string canaima  = "20043_CANAIMA";
+        string constru  = "20043_CONSTRUMAX_";
+        string eco      = "20043_ECO_CARIBE_";
+        string farmar   = "20043_FARMAR_";
+        string ideo     = "20043_IDEO_";
+        string iverco   = "20043_IVERCO_";
+        string mc       = "20043_MC_HOLDING_";
+        string panco    = "20043_PANCO_";
+        string torino   = "20043_TORINO_";
+        string pgjp     = "20043_PGJP_";
+        string world    = "20043_WORLD_BRANDS_";
+        string shej     = "20043_ZHEJIANG_";
+    }
+}
+```
+
+<Warning>
+  `bases` is **not used in the active code path**. All database schema names in production are resolved at runtime from `config.ini` via the `Conexion` class. The constants in `bases` reflect a historical set of database names and may not match the current deployment. Do not reference this class in new code.
+</Warning>

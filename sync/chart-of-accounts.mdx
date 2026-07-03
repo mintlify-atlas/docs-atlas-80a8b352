@@ -1,0 +1,131 @@
+---
+title: "Synchronizing the Chart of Accounts from Hechizo"
+sidebarTitle: "Chart of Accounts"
+description: "How Hechizo SAP Intercompany replicates GL account definitions from the Hechizo hub company to all nine branch companies using ProcesarCuentasdesdeHechizoV2."
+---
+
+The General Ledger chart of accounts is mastered exclusively in the Hechizo hub database. `ProcesarCuentasdesdeHechizoV2` is responsible for propagating those account definitions to all nine branch companies, ensuring that every GL account referenced by an automatically created document — purchase orders, AP invoices, AP credit notes, and incoming payments — already exists in the target company before any posting is attempted. The method runs in two sequential phases per execution cycle: a **Crear** pass that inserts accounts missing from the branch, followed by an **Actualizar** pass that patches the attributes of accounts that are already present.
+
+<Warning>
+  Modifying GL accounts in branch companies can affect financial reporting, period-end closing routines, and automatic account determination. Always run the **Crear** phase first and validate the newly created accounts in SAP B1's Chart of Accounts screen before running the **Actualizar** phase. Test in a non-production environment before enabling this sync on a live company database.
+</Warning>
+
+<Note>
+  GL account synchronization runs **after** all document processing steps (purchase requests, sales orders, purchase orders, invoices, credit notes, and payments). This sequencing is intentional: accounts must exist before they are referenced in transactions, and the document processing steps themselves may trigger SAP B1 to auto-create posting lines that reference Hechizo-mastered accounts.
+</Note>
+
+---
+
+## Method signature
+
+```csharp
+public static void ProcesarCuentasdesdeHechizoV2(
+    string bdDestino,
+    string tokenDestino,
+    ProcesoCuenta proceso
+)
+```
+
+### Parameters
+
+| Parameter | Type | Description |
+|---|---|---|
+| `bdDestino` | `string` | The company key string identifying the target branch (e.g., `"hogar"`, `"sur"`, `"omdo"`). Resolved internally to the full HANA schema name via `ConsultarBD`. |
+| `tokenDestino` | `string` | Basic Auth token for the target branch's SAP B1 Service Layer instance. Passed directly in the `Authorization` header of each Service Layer request. |
+| `proceso` | `ProcesoCuenta` | Enum value controlling the operation mode. `ProcesoCuenta.Crear` inserts missing accounts; `ProcesoCuenta.Actualizar` updates existing ones. |
+
+---
+
+## ProcesoCuenta enum
+
+```csharp
+public enum ProcesoCuenta
+{
+    Crear,
+    Actualizar
+}
+```
+
+The enum is defined as a nested public type inside `Inter_Hechiz.Data.Intercompany` and is therefore referenced in call sites as `Data.Intercompany.ProcesoCuenta.Crear` and `Data.Intercompany.ProcesoCuenta.Actualizar`.
+
+---
+
+## Two-phase call pattern
+
+Each execution cycle invokes `ProcesarCuentasdesdeHechizoV2` eighteen times — nine branches × two phases. Both phases must complete for the account definitions in all branches to be consistent with Hechizo.
+
+```csharp
+// ── Phase 1: Create missing GL accounts in each branch ──────────────────────
+Data.Intercompany.ProcesarCuentasdesdeHechizoV2(
+    "hogar", Conexion.token_hogarn, Data.Intercompany.ProcesoCuenta.Crear);
+Data.Intercompany.ProcesarCuentasdesdeHechizoV2(
+    "sur", Conexion.token_sur, Data.Intercompany.ProcesoCuenta.Crear);
+Data.Intercompany.ProcesarCuentasdesdeHechizoV2(
+    "omdo", Conexion.token_omdo, Data.Intercompany.ProcesoCuenta.Crear);
+Data.Intercompany.ProcesarCuentasdesdeHechizoV2(
+    "nedn", Conexion.token_nedn, Data.Intercompany.ProcesoCuenta.Crear);
+Data.Intercompany.ProcesarCuentasdesdeHechizoV2(
+    "flores", Conexion.token_flores, Data.Intercompany.ProcesoCuenta.Crear);
+Data.Intercompany.ProcesarCuentasdesdeHechizoV2(
+    "vital", Conexion.token_vital, Data.Intercompany.ProcesoCuenta.Crear);
+Data.Intercompany.ProcesarCuentasdesdeHechizoV2(
+    "emde", Conexion.token_emde, Data.Intercompany.ProcesoCuenta.Crear);
+Data.Intercompany.ProcesarCuentasdesdeHechizoV2(
+    "central", Conexion.token_central, Data.Intercompany.ProcesoCuenta.Crear);
+Data.Intercompany.ProcesarCuentasdesdeHechizoV2(
+    "desampa", Conexion.token_desampa, Data.Intercompany.ProcesoCuenta.Crear);
+
+// ── Phase 2: Update existing GL accounts in each branch ─────────────────────
+Data.Intercompany.ProcesarCuentasdesdeHechizoV2(
+    "hogar", Conexion.token_hogarn, Data.Intercompany.ProcesoCuenta.Actualizar);
+Data.Intercompany.ProcesarCuentasdesdeHechizoV2(
+    "sur", Conexion.token_sur, Data.Intercompany.ProcesoCuenta.Actualizar);
+Data.Intercompany.ProcesarCuentasdesdeHechizoV2(
+    "omdo", Conexion.token_omdo, Data.Intercompany.ProcesoCuenta.Actualizar);
+Data.Intercompany.ProcesarCuentasdesdeHechizoV2(
+    "nedn", Conexion.token_nedn, Data.Intercompany.ProcesoCuenta.Actualizar);
+Data.Intercompany.ProcesarCuentasdesdeHechizoV2(
+    "flores", Conexion.token_flores, Data.Intercompany.ProcesoCuenta.Actualizar);
+Data.Intercompany.ProcesarCuentasdesdeHechizoV2(
+    "vital", Conexion.token_vital, Data.Intercompany.ProcesoCuenta.Actualizar);
+Data.Intercompany.ProcesarCuentasdesdeHechizoV2(
+    "emde", Conexion.token_emde, Data.Intercompany.ProcesoCuenta.Actualizar);
+Data.Intercompany.ProcesarCuentasdesdeHechizoV2(
+    "central", Conexion.token_central, Data.Intercompany.ProcesoCuenta.Actualizar);
+Data.Intercompany.ProcesarCuentasdesdeHechizoV2(
+    "desampa", Conexion.token_desampa, Data.Intercompany.ProcesoCuenta.Actualizar);
+```
+
+---
+
+## Internal behavior
+
+When `proceso == ProcesoCuenta.Crear`, the method:
+1. Queries Hechizo's chart of accounts via HANA for all active GL accounts.
+2. Compares each account code against the destination branch's `OACT` table.
+3. For any account that does not yet exist in the branch, constructs a JSON object containing the account code (`AccCode`), account name, account type (`ActType`, mapped to the Service Layer enum value), and relevant control flags.
+4. Posts the object to the branch's `ChartOfAccounts` Service Layer endpoint.
+
+When `proceso == ProcesoCuenta.Actualizar`, the method:
+1. Retrieves the same set of accounts from Hechizo.
+2. For each account that **already exists** in the branch (based on `AccCode`), sends a PATCH request to `ChartOfAccounts('{AccCode}')` with updated field values.
+3. Errors for individual accounts are logged to the application log with the account code, destination database, and Service Layer error message, but processing continues for remaining accounts.
+
+---
+
+## Operational guidelines
+
+<CardGroup cols={2}>
+  <Card title="Run Crear before Actualizar" icon="list-check">
+    The two phases are designed to be executed in order within the same cycle. Running Actualizar on an account that does not yet exist in the branch will produce a Service Layer 404 error and the account will remain unsynchronized until the next Crear pass.
+  </Card>
+  <Card title="Validate after first deployment" icon="magnifying-glass">
+    After running the chart of accounts sync for the first time on a new branch, open the SAP B1 Chart of Accounts screen in that branch and verify that account types, control flags, and hierarchical positions are correct before allowing financial transactions to post.
+  </Card>
+  <Card title="Account type mapping" icon="code">
+    The `ActType` field from Hechizo's HANA query is mapped to the Service Layer enum expected by the `ChartOfAccounts` endpoint. If Hechizo introduces a new account type not covered by the current mapping, the method will log an error. Review `Intercompany.cs` around line 5689 to add new mappings.
+  </Card>
+  <Card title="Error isolation" icon="shield">
+    Failures on individual accounts do not abort the entire sync pass. Each account is processed in its own try/catch block and errors are written to the application log (`RegistroLog`). Review the log after each cycle to identify accounts that consistently fail.
+  </Card>
+</CardGroup>

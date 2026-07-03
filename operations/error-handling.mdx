@@ -1,0 +1,190 @@
+---
+title: "Error Handling and the @SINCROERROR Registry"
+sidebarTitle: "Error Handling"
+description: "How Hechizo SAP Intercompany catches, logs, and persists synchronization errors using daily log files and the custom @SINCROERROR SAP table."
+---
+
+Hechizo SAP Intercompany uses a two-tier approach to error handling. Every caught exception is immediately written to a daily flat file so that operators have a human-readable audit trail without needing database access. In parallel, a structured error record is inserted into the custom SAP table `@SINCROERROR` stored in the Hechizo source database, giving business users and support teams a queryable registry of every failed synchronization attempt across all nine company databases.
+
+## Two-Tier Error Strategy
+
+<CardGroup cols={2}>
+  <Card title="Tier 1: File Log" icon="file-circle-xmark">
+    Every `catch` block calls `objRegistraLog.Graba()`, appending the error message and timestamp to `Log/Log_YYYYMMDD.txt`. This is always written first, even if the HANA ODBC connection is unavailable.
+  </Card>
+  <Card title="Tier 2: @SINCROERROR Table" icon="table">
+    After logging to file, the `Inserterror()` private method persists a structured record into the `@SINCROERROR` user-defined table in the Hechizo SAP HANA database, enabling in-SAP querying and reporting.
+  </Card>
+</CardGroup>
+
+---
+
+## The `@SINCROERROR` Table
+
+`@SINCROERROR` is a User-Defined Table (UDT) registered in SAP Business One under the Hechizo source database (`BD_Hechizo`). Each row represents one failed synchronization event. The table is populated by the private static `Inserterror()` method in `Intercompany.cs`, which is called from every sync operation that catches an error.
+
+### Column Reference
+
+| Column | Type | Description |
+|---|---|---|
+| `DocEntry` | int | Sequential primary key; auto-incremented by `MAX(DocEntry) + 1` |
+| `DocNum` | int | Same value as `DocEntry` (SAP UDT requirement) |
+| `U_docunum` | string | Document number, item code, or partner code that failed (e.g., `CL00009`, `JF-C2-AZ-10`) |
+| `U_tipo` | string | Object type that failed — mirrors the SAP table name (e.g., `OCRD`, `OITM`, `OSLP`, `Attach`) |
+| `U_pais` | string | 6-character company key derived from the destination DB prefix (e.g., `OMDO`, `HOGAR`, `NEDN`) |
+| `U_mensaje` | string | Error message text captured at the time of failure |
+| `U_fecha` | date | Date of the error, formatted `yyyy/MM/dd` |
+| `U_hora` | time | Time of the error, formatted `HH:mm:ss` |
+
+The company key in `U_pais` is derived by stripping the `10071_` prefix and any `_TEST` suffix from the destination database name. For example, `10071_OMDO_TEST` becomes `OMDO`.
+
+### INSERT Statement (from source)
+
+```csharp
+string queryAct =
+    $"INSERT INTO \"{Conexion.BD_Hechizo}\".\"@SINCROERROR\" " +
+    "(\"DocEntry\",\"DocNum\",\"U_docunum\",\"U_tipo\",\"U_pais\",\"U_mensaje\",\"U_fecha\",\"U_hora\")" +
+    "values(" + numero + "," + numero + ",'" + nomcod + "','" + Tabla + "','" +
+    empresa + "','" + RR.Replace("'", "") + "','" +
+    DateTime.Now.ToString("yyyy/MM/dd") + "','" +
+    DateTime.Now.ToString("HH:mm:ss") + "')";
+```
+
+`RR` is the module-level variable that holds the last Service Layer response string. Single quotes in the response message are stripped before insertion to prevent SQL injection and parse errors.
+
+---
+
+## `@SINCROERROR` Table Initialization
+
+At program startup, `Main()` calls `SINCROERROR_V2()` before any sync work begins. This method invokes a stored procedure in HANA that cleans up stale error records from previous runs, ensuring the table reflects only the current execution cycle.
+
+```csharp
+public static void SINCROERROR_V2()
+{
+    try
+    {
+        using (var conn = new OdbcConnection(Conexion.strCon))
+        {
+            conn.Open();
+            new OdbcCommand(
+                $"CALL {Conexion.BD_Hechizo}.SP_LIMPIA_SINCROERROR()",
+                conn
+            ).ExecuteNonQuery();
+        }
+    }
+    catch (Exception ex)
+    {
+        objRegistraLog.Graba(
+            $"[{DateTime.Now.ToString("hh-mm-ss")}] Error SINCROERROR: " + ex.Message
+        );
+    }
+}
+```
+
+The legacy `SINCROERROR()` method (still present in the codebase) performed a raw `TRUNCATE TABLE` on `@SINCROERROR` if the current time was before 07:00. `SINCROERROR_V2()` supersedes it by delegating the cleanup logic to the `SP_LIMPIA_SINCROERROR` stored procedure, which can apply more granular retention rules without changing application code.
+
+<Note>
+If `SINCROERROR_V2()` itself fails (for example because the ODBC DSN is not configured), the exception is caught and written to the log file. The program continues running — the table simply will not be cleared before the new run populates it.
+</Note>
+
+---
+
+## Common Error Patterns
+
+The following patterns appear frequently in `Log_YYYYMMDD.txt` files and map to specific root causes.
+
+```text
+[03-13-13] Error SINCROERROR: ERROR [IM002] [Microsoft][ODBC Driver Manager] Data source name not found and no default driver specified
+[15: 13:24 PM]Crendo la solicCompra, ERROR [IM002] [Microsoft][ODBC Driver Manager] Data source name not found and no default driver specified
+[15: 13:24 PM]Error al OrdVenta, ERROR [IM002] [Microsoft][ODBC Driver Manager] Data source name not found and no default driver specified
+[15: 13:24 PM]Error en Orden Compra, ERROR [IM002] [Microsoft][ODBC Driver Manager] Data source name not found and no default driver specified
+[17:07:39 PM] Error creando la NC de proveedor en 10071_OMDO_TEST con el docNum factura deudor 8: No matching records found (ODBC -2028)
+```
+
+---
+
+## Error Code Reference
+
+<Accordion title="ODBC -2028 — No matching records found">
+**Message:** `No matching records found (ODBC -2028)`
+
+**Cause:** The document being created references a base document (e.g., a purchase order or sales invoice) that does not exist in the destination database. This commonly occurs when the base document synchronization step failed silently or has not yet run for the current cycle.
+
+**Resolution:** Check that the base document exists in the destination database. Re-run the sync cycle or manually create the missing base document, then re-trigger the affected step.
+</Accordion>
+
+<Accordion title="ERROR [IM002] — ODBC DSN not configured">
+**Message:** `ERROR [IM002] [Microsoft][ODBC Driver Manager] Data source name not found and no default driver specified`
+
+**Cause:** The SAP HANA ODBC driver named `HDBODBC` is not installed or the System DSN is not defined on the machine running `MCH_IC.exe`. The connection string in `config.ini` references `DSN={HDBODBC}`.
+
+**Resolution:** Install the SAP HANA Client on the Windows host and create a System DSN named `HDBODBC` pointing to `hana-007:30015`. See the Installation guide for step-by-step instructions.
+</Accordion>
+
+<Accordion title="HTTP -2 — Service Layer returned an error response">
+**Message:** Typically contains `error.message.value` text from the SAP Service Layer JSON error body
+
+**Cause:** The Service Layer accepted the connection but returned an HTTP error status (4xx or 5xx). The JSON error body is parsed and its `message.value` field is stored in the module-level `RR` variable, which is then passed to `Inserterror()`.
+
+**Resolution:** Open the corresponding `LogJson_YYYYMMDD.txt` entry to inspect the payload. Common causes include missing required fields, duplicate document numbers, or authorization issues with the session token.
+</Accordion>
+
+<Accordion title="HTTP -1 — Network or connection exception">
+**Message:** System-level exception message (e.g., `Unable to connect to the remote server`)
+
+**Cause:** A .NET `Exception` was thrown before or during the HTTP call — typically a DNS resolution failure, TCP timeout, or SSL certificate rejection. The `Respuesta.Codigo` is set to `-1` and `Respuesta.Mensaje` carries the exception text.
+
+**Resolution:** Verify network connectivity from the Windows host to `hana-007.fcscr-cloud.net:50000`. Confirm that the SSL certificate is trusted or that the certificate validation bypass is active (the application installs a permissive `RemoteCertificateValidationCallback`).
+</Accordion>
+
+<Warning>
+If the SAP HANA ODBC DSN `HDBODBC` is not installed on the machine running `MCH_IC.exe`, **all** synchronization operations will fail immediately with the `IM002` error. The application cannot query any source data or write any `@SINCROERROR` records because both operations go through the same ODBC connection. Install the SAP HANA Client and configure the System DSN before the first run.
+</Warning>
+
+---
+
+## The `Respuesta` Return Type
+
+Most sync methods in `Intercompany.cs` return a `Respuesta` object. A `Codigo` of `0` indicates success; any negative value indicates failure. The `Mensaje` field carries the human-readable description that is written to the log file.
+
+```csharp
+public class Respuesta
+{
+    public int Codigo { get; set; }    // 0 = success, negative = error
+    public string Mensaje { get; set; } // error description or Service Layer response
+}
+```
+
+Callers pattern:
+
+```csharp
+Respuesta R = new Respuesta();
+// ... attempt operation ...
+if (R.Codigo != 0)
+{
+    objRegistraLog.Graba("Error: " + R.Mensaje + "/ Hora: " + DateTime.Now.ToString("HH:mm:ss tt"));
+    Inserterror(bdDestino, "OITM", itemCode);
+}
+```
+
+---
+
+## Querying `@SINCROERROR` in SAP Business One
+
+<Tip>
+Open **Query Manager** in SAP Business One (connected to the Hechizo source database) and run the following query to see a consolidated view of all failed sync operations from the current run:
+
+```sql
+SELECT
+    "U_fecha"       AS "Date",
+    "U_hora"        AS "Time",
+    "U_pais"        AS "Company",
+    "U_tipo"        AS "Object Type",
+    "U_docunum"     AS "Document / Code",
+    "U_mensaje"     AS "Error Message"
+FROM "@SINCROERROR"
+ORDER BY "DocEntry" DESC
+```
+
+Filter by `U_pais` to focus on a single destination company, or by `U_tipo` (e.g., `'OCRD'` for business partners, `'OITM'` for items) to see only a specific object class.
+</Tip>

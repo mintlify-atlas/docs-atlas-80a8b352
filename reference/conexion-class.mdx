@@ -1,0 +1,194 @@
+---
+title: "Conexion Class: Database Connections and Token Generation"
+sidebarTitle: "Conexion Class"
+description: "Reference for Inter_Hechiz.Data.Conexion — static fields and methods for HANA ODBC connection strings and Service Layer Basic Auth token generation."
+---
+
+`Conexion` lives in the `Inter_Hechiz.Data` namespace and is a purely static initialization class. There is no constructor to call — all public fields are initialized inline using C#'s static field initializer mechanism, which means every value is computed once when the type is first accessed at program startup. Each field invokes a private method that reads `config.ini` through the `IniFile` P/Invoke wrapper. If `config.ini` is missing or a key is absent, the affected field is set to an empty string and the error is written to the rolling log via `RegistroLog.Graba`.
+
+<Note>
+  Because `Conexion` fields are evaluated at class load time (before `Program.Main` executes), any `config.ini` read failures will produce empty tokens before the first log message is written. Verify that `config.ini` is present next to the executable and that all keys are populated before deploying.
+</Note>
+
+---
+
+## Service Layer Token Fields
+
+Each company has a dedicated Basic Auth token field. Tokens are generated once at startup by `CrearToken` and reused throughout the synchronization run. If the Service Layer password or the database name changes, the application must be restarted.
+
+```csharp
+public static string token_hechizo  // Service Layer token for Hechizo (origin)
+public static string token_sur      // Service Layer token for the sur branch
+public static string token_omdo     // Service Layer token for the omdo branch
+public static string token_nedn     // Service Layer token for the nedn branch
+public static string token_hogarn   // Service Layer token for the hogar branch
+public static string token_flores   // Service Layer token for the flores branch
+public static string token_vital    // Service Layer token for the vital branch
+public static string token_emde     // Service Layer token for the emde branch
+public static string token_central  // Service Layer token for the central branch
+public static string token_desampa  // Service Layer token for the desampa branch
+```
+
+<Tip>
+  Note that the hogar branch token field is named `token_hogarn` (with a trailing `n`), while the corresponding database field is `BD_hogar`. Pass `Conexion.token_hogarn` when targeting the hogar branch.
+</Tip>
+
+---
+
+## Database Name Fields
+
+The `strCon` field holds the HANA ODBC connection string used for all `OdbcConnection` instances. The `BD_*` fields hold the physical HANA schema names for each company and are passed as string arguments to most `Intercompany` methods.
+
+```csharp
+public static string strCon       // Full HANA ODBC connection string
+public static string BD_Hechizo   // HANA schema name for Hechizo (origin)
+public static string BD_sur       // HANA schema name for the sur branch
+public static string BD_omdo      // HANA schema name for the omdo branch
+public static string BD_nedn      // HANA schema name for the nedn branch
+public static string BD_hogar     // HANA schema name for the hogar branch
+public static string BD_flores    // HANA schema name for the flores branch
+public static string BD_vital     // HANA schema name for the vital branch
+public static string BD_emde      // HANA schema name for the emde branch
+public static string BD_central   // HANA schema name for the central branch
+public static string BD_desampa   // HANA schema name for the desampa branch
+```
+
+### Typical usage
+
+```csharp
+using (OdbcConnection conn = new OdbcConnection(Conexion.strCon))
+{
+    conn.Open();
+    // schema-qualified query:
+    string query = $"SELECT * FROM \"{Conexion.BD_Hechizo}\".\"OITM\"";
+}
+```
+
+---
+
+## Key Private Methods
+
+### `conexionhana`
+
+```csharp
+private static string conexionhana()
+```
+
+Reads the HANA ODBC connection parameters from `[ConexionHanaProd]` in `config.ini` and assembles the connection string. The `DSN` key is used as the ODBC driver name (`DRIVER=`), which must match a registered HDBODBC entry on the host machine.
+
+**Returns:**
+
+```
+"DRIVER=HDBODBC; SERVERNODE=<host:port>;  UID=<user>; PWD=<password>"
+```
+
+The returned string is immediately assigned to `Conexion.strCon`. On exception, returns an empty string and logs the error.
+
+<Accordion title="config.ini keys read by conexionhana">
+  | Key | Section | Description |
+  |-----|---------|-------------|
+  | `DSN` | `ConexionHanaProd` | ODBC driver name, e.g. `HDBODBC` |
+  | `SERVERNODE` | `ConexionHanaProd` | SAP HANA host and port, e.g. `172.1.1.170:30015` |
+  | `UID` | `ConexionHanaProd` | HANA database user |
+  | `PWD` | `ConexionHanaProd` | HANA database password |
+</Accordion>
+
+---
+
+### `CrearToken`
+
+```csharp
+private static string CrearToken(string _DB)
+```
+
+Builds a `Basic <base64>` authorization token for use in SAP Business One Service Layer requests. The token encodes the Service Layer username and the target company database name as a JSON object, then combines that JSON with the plaintext password before Base64-encoding the result.
+
+**Token construction:**
+
+```csharp
+var credenciales = new { UserName = _user, CompanyDB = _DB };
+string Creential = JsonConvert.SerializeObject(credenciales);
+var authToken = Convert.ToBase64String(
+    Encoding.ASCII.GetBytes($"{Creential}:{_pass}"));
+return $"Basic {authToken}";
+```
+
+The parameter `_DB` is a logical key string (`"BD_Hechizo"`, `"BD_sur"`, etc.) that is resolved to the physical HANA schema name via a `switch` block before being embedded in the credentials JSON. On exception, logs the error and returns an empty string.
+
+<Accordion title="config.ini keys read by CrearToken">
+  | Key | Section | Description |
+  |-----|---------|-------------|
+  | `UserSL` | `ConexionHanaProd` | SAP Business One Service Layer username |
+  | `PassSL` | `ConexionHanaProd` | SAP Business One Service Layer password |
+</Accordion>
+
+---
+
+### `Consultar_xxx` Methods
+
+Each company has a corresponding private `Consultar_` method (e.g. `Consultar_Hechizo`, `Consultar_sur`, `Consultar_omdo`, etc.) that reads a single key from `[ConexionHanaProd]` in `config.ini` and returns the physical HANA schema name. The key name matches the logical branch name (`ORIGEN` for Hechizo, `sur`, `omdo`, `nedn`, `hogar`, `flores`, `vital`, `emde`, `central`, `desampa`).
+
+```csharp
+private static string Consultar_Hechizo()
+// Reads [ConexionHanaProd] > ORIGEN → returns e.g. "10025_HECHIZO"
+
+private static string Consultar_sur()
+// Reads [ConexionHanaProd] > sur → returns e.g. "10025_SUR"
+
+// ... one method per company
+```
+
+These methods are called both during field initialization and inside `CrearToken`'s `switch` block to resolve logical keys to physical names.
+
+---
+
+## `ConexionSAP` (DI-API companion)
+
+```csharp
+public static class ConexionSAP
+{
+    public static Company Compania = new Company();
+}
+```
+
+A companion static class defined in the same file (`Inter_Hechiz.Data` namespace). It holds a single `SAPbobsCOM.Company` instance for direct SAP DI-API calls. In the current codebase, `ConexionSAP` is used by `ConexionDiapi.Open()` to establish a DI-API session for attachment operations.
+
+<Warning>
+  The attachment functionality (`Diapiattachment.CrearAttach`) that consumed `ConexionSAP` is currently commented out in `Program.Main`. `ConexionSAP.Compania` is not connected at runtime. Do not reference it without first calling `ConexionDiapi.Open()`.
+</Warning>
+
+---
+
+## `config.ini` Section Reference
+
+All connection configuration is stored in a single `config.ini` file placed next to the application executable. The file is read at startup by the static field initializers and again inside each method that needs the Service Layer URL.
+
+```ini
+[ConexionHanaProd]
+DSN=HDBODBC
+SERVERNODE=<hana-host>:<port>
+UID=<hana-user>
+PWD=<hana-password>
+UserSL=<service-layer-user>
+PassSL=<service-layer-password>
+ORIGEN=<hechizo-schema>
+sur=<sur-schema>
+omdo=<omdo-schema>
+nedn=<nedn-schema>
+hogar=<hogar-schema>
+flores=<flores-schema>
+vital=<vital-schema>
+emde=<emde-schema>
+central=<central-schema>
+desampa=<desampa-schema>
+
+[ServiceLayer]
+UrlSL=https://<service-layer-host>:50000/b1s/v1/
+
+[ConexionSap]
+Server=<diapi-server>
+UserName=<diapi-user>
+Password=<diapi-password>
+DbUserName=<db-user>
+DbPassword=<db-password>
+```
